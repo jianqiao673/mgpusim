@@ -1,0 +1,48 @@
+#!/bin/bash
+
+# 设置默认值
+DEFAULT_PROGRAM="relu"
+DEFAULT_ARGS="-timing"
+
+# 显示帮助信息
+usage() {
+    echo "Usage: $0 [-p PROGRAM_NAME] [-a PROGRAM_ARGS]"
+    echo "Options:"
+    echo "  -p PROGRAM_NAME   Specify the program to run (default: $DEFAULT_PROGRAM)"
+    echo "  -a PROGRAM_ARGS   Specify additional program arguments (default: '$DEFAULT_ARGS')"
+    exit 1
+}
+
+# 解析命令行参数
+while getopts ":p:a:" opt; do
+    case $opt in
+        p) PROGRAM="$OPTARG" ;;
+        a) ARGS="$OPTARG" ;;
+        \?) usage ;;
+    esac
+done
+
+# 如果没有提供参数，使用默认值
+PROGRAM=${PROGRAM:-$DEFAULT_PROGRAM}
+ARGS=${ARGS:-$DEFAULT_ARGS}
+
+# 检查目录是否存在
+if [ ! -d "mgpusim/amd/samples/$PROGRAM" ]; then
+    echo "Error: Directory mgpusim/amd/samples/$PROGRAM does not exist!" >&2
+    exit 1
+fi
+
+# 创建日志目录（如果不存在）
+mkdir -p log
+
+# 构建完整命令
+CMD="cd mgpusim/amd/samples/$PROGRAM && rm -f akita_sim_**.sqlite3 && go build && ./$PROGRAM $ARGS"
+
+# 打印命令（会显示在终端，不会被重定向）
+echo "Executing: $CMD" >&2
+
+# 执行命令并重定向输出
+eval "$CMD" &> "log/${PROGRAM}.txt"
+
+# 打印完成信息
+echo "Execution completed. Output saved to log/${PROGRAM}.txt" >&2

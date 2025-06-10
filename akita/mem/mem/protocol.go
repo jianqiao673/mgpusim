@@ -13,9 +13,10 @@ var controlMsgByteOverhead = 4
 // cache modules or memory controllers.
 type AccessReq interface {
 	sim.Msg
-	GetAddress() uint64
-	GetByteSize() uint64
+	GetDeviceID() uint64
 	GetPID() vm.PID
+	GetAddress() uint64 // Get virtual address of the request
+	GetByteSize() uint64
 }
 
 // A AccessRsp is a respond in the memory system.
@@ -28,6 +29,7 @@ type AccessRsp interface {
 type ReadReq struct {
 	sim.MsgMeta
 
+	DeviceID		   uint64
 	Address            uint64
 	AccessByteSize     uint64
 	PID                vm.PID
@@ -58,6 +60,11 @@ func (r *ReadReq) GenerateRsp(data []byte) sim.Rsp {
 		Build()
 
 	return rsp
+}
+
+// GetDeviceID returns the ID of device that the request is accessing.
+func (r ReadReq) GetDeviceID() uint64 {
+	return r.DeviceID
 }
 
 // GetByteSize returns the number of byte that the request is accessing.
@@ -146,6 +153,7 @@ func (b ReadReqBuilder) Build() *ReadReq {
 type WriteReq struct {
 	sim.MsgMeta
 
+	DeviceID 		   uint64
 	Address            uint64
 	Data               []byte
 	DirtyMask          []bool
@@ -176,6 +184,11 @@ func (r *WriteReq) GenerateRsp() sim.Rsp {
 		Build()
 
 	return rsp
+}
+
+// GetDeviceID returns the ID of device that the request is accessing.
+func (r WriteReq) GetDeviceID() uint64 {
+	return r.DeviceID
 }
 
 // GetByteSize returns the number of byte that the request is writing.
@@ -507,13 +520,13 @@ func (b ControlMsgBuilder) Build() *ControlMsg {
 	return m
 }
 
-type MemoryReq interface {
-	sim.Msg
-	GetDeviceID() uint64
-	GetPID() vm.PID
-	GetVAddr() uint64
-	GetByteSize() uint64
-}
+// type MemoryReq interface {
+// 	sim.Msg
+// 	GetDeviceID() uint64
+// 	GetPID() vm.PID
+// 	GetAddress() uint64
+// 	GetByteSize() uint64
+// }
 
 // A AllocateReq is a request sent to a memory allocator to allocate memory
 type AllocateReq struct {
@@ -546,7 +559,7 @@ func (r *AllocateReq) GetPID() vm.PID {
 	return r.PID
 }
 
-func (r *AllocateReq) GetVAddr() uint64 {
+func (r *AllocateReq) GetAddress() uint64 {
 	return r.VAddr
 }
 
@@ -631,7 +644,7 @@ func (r *AllocateDoneRsp) GetPID() vm.PID {
 	return r.PID
 }
 
-func (r *AllocateDoneRsp) GetVAddr() uint64 {
+func (r *AllocateDoneRsp) GetAddress() uint64 {
 	return 0
 }
 
@@ -669,7 +682,7 @@ func (r *FreeReq) GetPID() vm.PID {
 	return r.PID
 }
 
-func (r *FreeReq) GetVAddr() uint64 {
+func (r *FreeReq) GetAddress() uint64 {
 	return r.VAddr
 }
 

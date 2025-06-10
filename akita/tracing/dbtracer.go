@@ -112,10 +112,10 @@ func (t *DBTracer) EndTask(task Task) {
 		StartTime: float64(originalTask.StartTime),
 		EndTime:   float64(originalTask.EndTime),
 	}
-	if detail, ok := originalTask.Detail.(mem.MemoryReq); ok {
+	if detail, ok := originalTask.Detail.(mem.AccessReq); ok {
 		taskTable.DeviceID = detail.GetDeviceID()
 		taskTable.PID = detail.GetPID()
-		taskTable.VAddr = detail.GetVAddr()
+		taskTable.VAddr = detail.GetAddress()
 		taskTable.ByteSize = detail.GetByteSize()
 	} else {
 		taskTable.DeviceID = 0

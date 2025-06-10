@@ -2,7 +2,7 @@
 
 # 设置默认值
 DEFAULT_PROGRAM="relu"
-DEFAULT_ARGS="-timing"
+DEFAULT_ARGS="-timing -trace-vis"
 
 # 显示帮助信息
 usage() {

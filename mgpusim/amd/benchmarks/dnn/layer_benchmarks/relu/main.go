@@ -94,8 +94,8 @@ func (b *Benchmark) initMem() {
 	b.driver.MemCopyH2D(b.context, b.gInputData, b.inputData)
 
 	// [Test] FreeMemory
-	b.driver.FreeMemory(b.context, b.gInputData)
-	b.driver.FreeMemory(b.context, b.gOutputData)
+	// b.driver.FreeMemory(b.context, b.gInputData)
+	// b.driver.FreeMemory(b.context, b.gOutputData)
 }
 
 func (b *Benchmark) exec() {

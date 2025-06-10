@@ -507,12 +507,21 @@ func (b ControlMsgBuilder) Build() *ControlMsg {
 	return m
 }
 
+type MemoryReq interface {
+	sim.Msg
+	GetDeviceID() uint64
+	GetPID() vm.PID
+	GetVAddr() uint64
+	GetByteSize() uint64
+}
+
 // A AllocateReq is a request sent to a memory allocator to allocate memory
 type AllocateReq struct {
 	sim.MsgMeta
 
 	DeviceID uint64
 	PID vm.PID
+	VAddr uint64
 	ByteSize uint64
 }
 
@@ -529,18 +538,26 @@ func (r *AllocateReq) Clone() sim.Msg {
 	return &cloneMsg
 }
 
-// GenerateRsp generate DataReadyRsp to ReadReq
-func (r *AllocateReq) GenerateRsp(vAddr uint64) sim.Rsp {
-	rsp := AllocateDoneRspBuilder{}.
-		WithDeviceID(r.DeviceID).
-		WithPID(r.PID).
-		WithByteSize(r.ByteSize).
-		WithVAddr(vAddr).
-		WithRspTo(r.ID).
-		Build()
-
-	return rsp
+func (r *AllocateReq) GetDeviceID() uint64 {
+	return r.DeviceID
 }
+
+func (r *AllocateReq) GetPID() vm.PID {
+	return r.PID
+}
+
+func (r *AllocateReq) GetVAddr() uint64 {
+	return r.VAddr
+}
+
+func (r *AllocateReq) GetByteSize() uint64 {
+	return r.ByteSize
+}
+
+func (r *AllocateReq) SetVAddr(vAddr uint64) {
+	r.VAddr = vAddr
+}
+
 
 type AllocateReqBuilder struct {
 	deviceID uint64
@@ -606,56 +623,20 @@ func (r *AllocateDoneRsp) GetRspTo() string {
 	return r.RspTo
 }
 
-type AllocateDoneRspBuilder struct {
-	deviceID uint64
-	pid vm.PID
-	byteSize uint64
-
-	vAddr uint64
-	rspTo string
+func (r *AllocateDoneRsp) GetDeviceID() uint64 {
+	return r.DeviceID
 }
 
-// WithDeviceID sets the DeviceID of the request to build.
-func (b AllocateDoneRspBuilder) WithDeviceID(deviceID uint64) AllocateDoneRspBuilder {
-	b.deviceID = deviceID
-	return b
+func (r *AllocateDoneRsp) GetPID() vm.PID {
+	return r.PID
 }
 
-// WithPID sets the PID of the request to build.
-func (b AllocateDoneRspBuilder) WithPID(pid vm.PID) AllocateDoneRspBuilder {
-	b.pid = pid
-	return b
+func (r *AllocateDoneRsp) GetVAddr() uint64 {
+	return 0
 }
 
-// WithByteSize sets the byte size of the request to build.
-func (b AllocateDoneRspBuilder) WithByteSize(byteSize uint64) AllocateDoneRspBuilder {
-	b.byteSize = byteSize
-	return b
-}
-
-// WithByteSize sets the virtual address of the request to build.
-func (b AllocateDoneRspBuilder) WithVAddr(vAddr uint64) AllocateDoneRspBuilder {
-	b.vAddr = vAddr
-	return b
-}
-
-// WithRspTo sets ID of the request that the respond to build is replying to.
-func (b AllocateDoneRspBuilder) WithRspTo(rspTo string) AllocateDoneRspBuilder {
-	b.rspTo = rspTo
-	return b
-}
-
-// Build creates a new AllocateReq
-func (b AllocateDoneRspBuilder) Build() *AllocateDoneRsp {
-	r := &AllocateDoneRsp{}
-	r.ID = b.rspTo
-	r.DeviceID = b.deviceID
-	r.PID = b.pid
-	r.ByteSize = b.byteSize
-	r.VAddr = b.vAddr
-	r.RspTo = b.rspTo
-
-	return r
+func (r *AllocateDoneRsp) GetByteSize() uint64 {
+	return r.ByteSize
 }
 
 // A FreeReq is a request sent to a memory allocator to free memory
@@ -680,17 +661,24 @@ func (r *FreeReq) Clone() sim.Msg {
 	return &cloneMsg
 }
 
-// GenerateRsp generate DataReadyRsp to ReadReq
-func (r *FreeReq) GenerateRsp(byteSize uint64) sim.Rsp {
-	rsp := FreeDoneRspBuilder{}.
-		WithDeviceID(r.DeviceID).
-		WithPID(r.PID).
-		WithVAddr(r.VAddr).
-		WithByteSize(byteSize).
-		WithRspTo(r.ID).
-		Build()
+func (r *FreeReq) GetDeviceID() uint64 {
+	return r.DeviceID
+}
 
-	return rsp
+func (r *FreeReq) GetPID() vm.PID {
+	return r.PID
+}
+
+func (r *FreeReq) GetVAddr() uint64 {
+	return r.VAddr
+}
+
+func (r *FreeReq) GetByteSize() uint64 {
+	return 0
+}
+
+func (r *FreeReq) SetVAddr(vAddr uint64) {
+	r.VAddr = vAddr
 }
 
 type FreeReqBuilder struct {
@@ -724,87 +712,6 @@ func (b FreeReqBuilder) Build() *FreeReq {
 	r.DeviceID = b.deviceID
 	r.PID = b.pid
 	r.VAddr = b.vAddr
-
-	return r
-}
-
-type FreeDoneRsp struct {
-	sim.MsgMeta
-
-	DeviceID uint64
-	PID vm.PID
-	VAddr uint64 // The start virtual address of the allocated memory
-	
-	ByteSize uint64
-	RspTo string
-}
-
-// Meta returns the message meta.
-func (r *FreeDoneRsp) Meta() *sim.MsgMeta {
-	return &r.MsgMeta
-}
-
-// Clone returns cloned ReadReq with different ID
-func (r *FreeDoneRsp) Clone() sim.Msg {
-	cloneMsg := *r
-	cloneMsg.ID = sim.GetIDGenerator().Generate()
-
-	return &cloneMsg
-}
-
-// GetRspTo returns the ID of the request that the respond is responding to.
-func (r *FreeDoneRsp) GetRspTo() string {
-	return r.RspTo
-}
-
-type FreeDoneRspBuilder struct {
-	deviceID uint64
-	pid vm.PID
-	byteSize uint64
-
-	vAddr uint64
-	rspTo string
-}
-
-// WithDeviceID sets the DeviceID of the request to build.
-func (b FreeDoneRspBuilder) WithDeviceID(deviceID uint64) FreeDoneRspBuilder {
-	b.deviceID = deviceID
-	return b
-}
-
-// WithPID sets the PID of the request to build.
-func (b FreeDoneRspBuilder) WithPID(pid vm.PID) FreeDoneRspBuilder {
-	b.pid = pid
-	return b
-}
-
-// WithByteSize sets the virtual address of the request to build.
-func (b FreeDoneRspBuilder) WithVAddr(vAddr uint64) FreeDoneRspBuilder {
-	b.vAddr = vAddr
-	return b
-}
-
-// WithByteSize sets the byte size of the request to build.
-func (b FreeDoneRspBuilder) WithByteSize(byteSize uint64) FreeDoneRspBuilder {
-	b.byteSize = byteSize
-	return b
-}
-
-// WithRspTo sets ID of the request that the respond to build is replying to.
-func (b FreeDoneRspBuilder) WithRspTo(rspTo string) FreeDoneRspBuilder {
-	b.rspTo = rspTo
-	return b
-}
-
-// Build creates a new FreeReq
-func (b FreeDoneRspBuilder) Build() *FreeDoneRsp {
-	r := &FreeDoneRsp{}
-	r.ID = b.rspTo
-	r.DeviceID = b.deviceID
-	r.PID = b.pid
-	r.VAddr = b.vAddr
-	r.ByteSize = b.byteSize
-	r.RspTo = b.rspTo
 
 	return r
 }

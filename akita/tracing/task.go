@@ -1,6 +1,9 @@
 package tracing
 
-import "github.com/sarchlab/akita/v4/sim"
+import (
+	"github.com/sarchlab/akita/v4/mem/vm"
+	"github.com/sarchlab/akita/v4/sim"
+)
 
 // A TaskStep represents a milestone in the processing of task
 type TaskStep struct {
@@ -20,6 +23,11 @@ type Task struct {
 	Steps      []TaskStep     `json:"steps"`
 	Detail     interface{}    `json:"-"`
 	ParentTask *Task          `json:"-"`
+	// Memory tracing
+	DeviceID       uint64
+	PID 	       vm.PID
+	VAddr          uint64
+	ByteSize       uint64
 }
 
 // TaskFilter is a function that can filter interesting tasks. If this function

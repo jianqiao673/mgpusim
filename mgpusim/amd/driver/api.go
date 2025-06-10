@@ -152,8 +152,8 @@ func (d *Driver) AllocateMemory(
 		l2Dirty: false,
 	})
 
-	allocateDoneRsp := allocateReq.GenerateRsp(ptr)
-	tracing.TraceReqFinalize(allocateDoneRsp, d)
+	allocateReq.SetVAddr(uint64(ptr))
+	tracing.TraceReqFinalize(allocateReq, d)
 
 	log.Printf("[Allocate] pid: %d, deviceid: %d, vAddr: %d, bytySize: %d\n", ctx.pid, ctx.currentGPUID, ptr, byteSize)
 	return Ptr(ptr)
@@ -236,8 +236,8 @@ func (d *Driver) FreeMemory(ctx *Context, ptr Ptr) error {
 		}
 	}
 
-	freeDoneRsp := freeReq.GenerateRsp(uint64(1 << d.Log2PageSize)) // [TODO] should be the size of the memory freed
-	tracing.TraceReqFinalize(freeDoneRsp, d)
+	freeReq.SetVAddr(uint64(ptr))
+	tracing.TraceReqFinalize(freeReq, d)
 
 	return nil
 }

@@ -4,6 +4,8 @@ import (
 	"sync"
 
 	"github.com/sarchlab/akita/v4/datarecording"
+	"github.com/sarchlab/akita/v4/mem/mem"
+	"github.com/sarchlab/akita/v4/mem/vm"
 	"github.com/sarchlab/akita/v4/sim"
 	"github.com/tebeka/atexit"
 )
@@ -16,6 +18,12 @@ type taskTableEntry struct {
 	Location  string  `json:"location" akita_data:"index"`
 	StartTime float64 `json:"start_time" akita_data:"index"`
 	EndTime   float64 `json:"end_time" akita_data:"index"`
+
+	// Memory tracing
+	DeviceID  uint64  `json:"device_id" akita_data:"index"`
+	PID       vm.PID   `json:"pid" akita_data:"index"`
+	VAddr     uint64  `json:"v_addr" akita_data:"index"`
+	ByteSize  uint64  `json:"byte_size" akita_data:"index"`
 }
 
 // DBTracer is a tracer that can store tasks into a database.
@@ -94,6 +102,7 @@ func (t *DBTracer) EndTask(task Task) {
 	originalTask.EndTime = task.EndTime
 	delete(t.tracingTasks, task.ID)
 
+
 	taskTable := taskTableEntry{
 		ID:        originalTask.ID,
 		ParentID:  originalTask.ParentID,
@@ -102,6 +111,17 @@ func (t *DBTracer) EndTask(task Task) {
 		Location:  originalTask.Location,
 		StartTime: float64(originalTask.StartTime),
 		EndTime:   float64(originalTask.EndTime),
+	}
+	if detail, ok := originalTask.Detail.(mem.MemoryReq); ok {
+		taskTable.DeviceID = detail.GetDeviceID()
+		taskTable.PID = detail.GetPID()
+		taskTable.VAddr = detail.GetVAddr()
+		taskTable.ByteSize = detail.GetByteSize()
+	} else {
+		taskTable.DeviceID = 0
+		taskTable.PID = 0
+		taskTable.VAddr = 0
+		taskTable.ByteSize = 0
 	}
 
 	t.backend.InsertData("trace", taskTable)

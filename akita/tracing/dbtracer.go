@@ -22,7 +22,7 @@ type taskTableEntry struct {
 	// Memory tracing
 	DeviceID  uint64  `json:"device_id" akita_data:"index"`
 	PID       vm.PID   `json:"pid" akita_data:"index"`
-	VAddr     uint64  `json:"v_addr" akita_data:"index"`
+	Address   uint64  `json:"address" akita_data:"index"`
 	ByteSize  uint64  `json:"byte_size" akita_data:"index"`
 }
 
@@ -115,12 +115,17 @@ func (t *DBTracer) EndTask(task Task) {
 	if detail, ok := originalTask.Detail.(mem.AccessReq); ok {
 		taskTable.DeviceID = detail.GetDeviceID()
 		taskTable.PID = detail.GetPID()
-		taskTable.VAddr = detail.GetAddress()
+		taskTable.Address = detail.GetAddress() // Virtual Address
 		taskTable.ByteSize = detail.GetByteSize()
+	} else if detail, ok := originalTask.Detail.(vm.TranslationReq); ok {
+		taskTable.DeviceID = detail.DeviceID
+		taskTable.PID = detail.PID
+		taskTable.Address = detail.VAddr // PageID
+		taskTable.ByteSize = 4096
 	} else {
 		taskTable.DeviceID = 0
 		taskTable.PID = 0
-		taskTable.VAddr = 0
+		taskTable.Address = 0
 		taskTable.ByteSize = 0
 	}
 

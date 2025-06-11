@@ -265,6 +265,7 @@ func (b WriteReqBuilder) CanWaitForCoalesce() WriteReqBuilder {
 	return b
 }
 
+// [TODO] Build WriteReq with ByteSize
 // Build creates a new WriteReq
 func (b WriteReqBuilder) Build() *WriteReq {
 	r := &WriteReq{}
@@ -524,7 +525,7 @@ func (b ControlMsgBuilder) Build() *ControlMsg {
 // 	sim.Msg
 // 	GetDeviceID() uint64
 // 	GetPID() vm.PID
-// 	GetAddress() uint64
+// 	GetVAddr() uint64
 // 	GetByteSize() uint64
 // }
 

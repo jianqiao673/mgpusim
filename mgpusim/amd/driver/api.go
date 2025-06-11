@@ -143,7 +143,7 @@ func (d *Driver) AllocateMemory(
 		Build()
 	tracing.TraceReqInitiate(allocateReq, d, tracing.MsgIDAtReceiver(allocateReq, d))
 
-	ptr := d.memAllocator.Allocate(ctx.pid, byteSize, ctx.currentGPUID)
+	ptr, pAddr := d.memAllocator.Allocate(ctx.pid, byteSize, ctx.currentGPUID)
 
 	ctx.buffers = append(ctx.buffers, &buffer{
 		vAddr:   Ptr(ptr),
@@ -152,10 +152,10 @@ func (d *Driver) AllocateMemory(
 		l2Dirty: false,
 	})
 
-	allocateReq.SetVAddr(uint64(ptr))
+	allocateReq.SetVAddr(pAddr)
 	tracing.TraceReqFinalize(allocateReq, d)
 
-	log.Printf("[Allocate] pid: %d, deviceid: %d, vAddr: %d, bytySize: %d\n", ctx.pid, ctx.currentGPUID, ptr, byteSize)
+	log.Printf("[Allocate] pid: %d, deviceid: %d, vAddr: 0x%x, pAddr: 0x%x\n", ctx.pid, ctx.currentGPUID, ptr, pAddr)
 	return Ptr(ptr)
 }
 
@@ -164,16 +164,26 @@ func (d *Driver) AllocateUnifiedMemory(
 	ctx *Context,
 	byteSize uint64,
 ) Ptr {
-	ptr := Ptr(d.memAllocator.AllocateUnified(ctx.pid, byteSize))
+	allocateReq := mem.AllocateReqBuilder{}.
+	WithDeviceID(uint64(ctx.currentGPUID)).
+	WithPID(ctx.pid).
+	WithByteSize(byteSize).
+	Build()
+	tracing.TraceReqInitiate(allocateReq, d, tracing.MsgIDAtReceiver(allocateReq, d))
+
+	ptr, pAddr := d.memAllocator.AllocateUnified(ctx.pid, byteSize)
 
 	ctx.buffers = append(ctx.buffers, &buffer{
-		vAddr:   ptr,
+		vAddr:   Ptr(ptr),
 		size:    byteSize,
 		freed:   false,
 		l2Dirty: false,
 	})
 
-	return ptr
+	allocateReq.SetVAddr(pAddr)
+	tracing.TraceReqFinalize(allocateReq, d)
+
+	return Ptr(ptr)
 }
 
 // Remap keeps the virtual address unchanged and moves the physical address to
@@ -219,26 +229,26 @@ func unique(in []int) []int {
 // with the function AllocateMemory earlier. Error will be returned if the ptr
 // provided is invalid.
 func (d *Driver) FreeMemory(ctx *Context, ptr Ptr) error {
-	log.Printf("[Free] pid: %d, deviceid: %d, vAddr: %d\n", ctx.pid, ctx.currentGPUID, ptr)
-
+	
 	freeReq := mem.FreeReqBuilder{}.
 	WithDeviceID(uint64(ctx.currentGPUID)).
 	WithPID(ctx.pid).
 	WithVAddr(uint64(ptr)).
 	Build()
 	tracing.TraceReqInitiate(freeReq, d, tracing.MsgIDAtReceiver(freeReq, d))
-
-	d.memAllocator.Free(uint64(ptr))
-
+	
+	pAddr := d.memAllocator.Free(uint64(ptr))
+	
 	for i, buffer := range ctx.buffers {
 		if buffer.vAddr == ptr {
 			ctx.buffers[i].freed = true
 		}
 	}
-
-	freeReq.SetVAddr(uint64(ptr))
+	
+	freeReq.SetVAddr(pAddr)
 	tracing.TraceReqFinalize(freeReq, d)
-
+	
+	log.Printf("[Free] pid: %d, deviceid: %d, vAddr: 0x%x, pAddr: 0x%x\n", ctx.pid, ctx.currentGPUID, ptr, pAddr)
 	return nil
 }
 

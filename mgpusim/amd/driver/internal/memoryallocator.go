@@ -11,11 +11,11 @@ import (
 type MemoryAllocator interface {
 	RegisterDevice(device *Device)
 	GetDeviceIDByPAddr(pAddr uint64) int
-	Allocate(pid vm.PID, byteSize uint64, deviceID int) uint64
-	AllocateUnified(pid vm.PID, byteSize uint64) uint64
-	Free(vAddr uint64)
+	Allocate(pid vm.PID, byteSize uint64, deviceID int) (uint64, uint64) // Returns the virtual address and physical address of the allocated memory
+	AllocateUnified(pid vm.PID, byteSize uint64) (uint64, uint64) // Returns the virtual address and physical address of the allocated memory
+	Free(vAddr uint64) uint64 // Returns the physical address of the freed page
 	Remap(pid vm.PID, pageVAddr, byteSize uint64, deviceID int)
-	RemovePage(vAddr uint64)
+	RemovePage(vAddr uint64) uint64 // Returns the physical address of the removed page
 	AllocatePageWithGivenVAddr(
 		pid vm.PID,
 		deviceID int,
@@ -99,7 +99,7 @@ func (a *memoryAllocatorImpl) Allocate(
 	pid vm.PID,
 	byteSize uint64,
 	deviceID int,
-) uint64 {
+) (uint64, uint64) {
 	if byteSize == 0 {
 		panic("Allocating 0 bytes.")
 	}
@@ -115,7 +115,7 @@ func (a *memoryAllocatorImpl) Allocate(
 func (a *memoryAllocatorImpl) AllocateUnified(
 	pid vm.PID,
 	byteSize uint64,
-) uint64 {
+) (uint64, uint64) {
 	if byteSize == 0 {
 		panic("Allocating 0 bytes.")
 	}
@@ -133,7 +133,7 @@ func (a *memoryAllocatorImpl) allocatePages(
 	pid vm.PID,
 	deviceID int,
 	unified bool,
-) (firstPageVAddr uint64) {
+) (firstPageVAddr uint64, firstPagePAddr uint64) {
 	pState, found := a.processMemoryStates[pid]
 	if !found {
 		a.processMemoryStates[pid] = &processMemoryState{
@@ -148,7 +148,11 @@ func (a *memoryAllocatorImpl) allocatePages(
 	nextVAddr := pState.nextVAddr
 
 	for i := 0; i < numPages; i++ {
-		pAddr := device.allocatePage()
+		pAddr := device.allocatePage() // [TODO] Does allocatePage returns conscutive addresses?
+		if i == 0 {	
+			firstPagePAddr = pAddr
+		}
+
 		vAddr := nextVAddr + uint64(i)*pageSize
 
 		page := vm.Page{
@@ -169,7 +173,7 @@ func (a *memoryAllocatorImpl) allocatePages(
 
 	pState.nextVAddr += pageSize * uint64(numPages)
 
-	return nextVAddr
+	return nextVAddr, firstPagePAddr
 }
 
 func (a *memoryAllocatorImpl) Remap(
@@ -191,14 +195,14 @@ func (a *memoryAllocatorImpl) Remap(
 	a.allocateMultiplePagesWithGivenVAddrs(pid, deviceID, vAddrs, false)
 }
 
-func (a *memoryAllocatorImpl) RemovePage(vAddr uint64) {
+func (a *memoryAllocatorImpl) RemovePage(vAddr uint64) uint64 {
 	a.Lock()
 	defer a.Unlock()
 
-	a.removePage(vAddr)
+	return a.removePage(vAddr)
 }
 
-func (a *memoryAllocatorImpl) removePage(vAddr uint64) {
+func (a *memoryAllocatorImpl) removePage(vAddr uint64) uint64 {
 	page, ok := a.vAddrToPageMapping[vAddr]
 
 	if !ok {
@@ -210,6 +214,8 @@ func (a *memoryAllocatorImpl) removePage(vAddr uint64) {
 	dState.addSinglePAddr(page.PAddr)
 
 	a.pageTable.Remove(page.PID, page.VAddr)
+
+	return page.PAddr
 }
 
 func (a *memoryAllocatorImpl) AllocatePageWithGivenVAddr(
@@ -279,9 +285,9 @@ func (a *memoryAllocatorImpl) allocateMultiplePagesWithGivenVAddrs(
 	return pages
 }
 
-func (a *memoryAllocatorImpl) Free(ptr uint64) {
+func (a *memoryAllocatorImpl) Free(ptr uint64) uint64 {
 	a.Lock()
 	defer a.Unlock()
 
-	a.removePage(ptr)
+	return a.removePage(ptr)
 }

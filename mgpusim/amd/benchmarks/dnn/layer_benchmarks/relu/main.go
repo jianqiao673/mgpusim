@@ -86,6 +86,9 @@ func (b *Benchmark) initMem() {
 		b.gOutputData = b.gInputData
 	}
 
+	log.Printf("gInputData: 0x%x, gOutputData: 0x%x\n",
+		b.gInputData, b.gOutputData)
+
 	b.inputData = make([]float32, b.Length)
 	b.outputData = make([]float32, b.Length)
 	for i := 0; i < b.Length; i++ {
@@ -93,14 +96,14 @@ func (b *Benchmark) initMem() {
 	}
 
 	b.driver.MemCopyH2D(b.context, b.gInputData, b.inputData)
-
-	// [Test] FreeMemory
-	// b.driver.FreeMemory(b.context, b.gInputData)
-	// b.driver.FreeMemory(b.context, b.gOutputData)
 }
 
 func (b *Benchmark) exec() {
 	queues := make([]*driver.CommandQueue, len(b.gpus))
+
+	var allCoData []driver.Ptr
+    var allKernArgData []driver.Ptr
+    var allPackets []driver.Ptr
 
 	for i, gpu := range b.gpus {
 		b.driver.SelectGPU(b.context, gpu)
@@ -115,20 +118,43 @@ func (b *Benchmark) exec() {
 			int64(numWI * i), 0, 0,
 		}
 
-		b.driver.EnqueueLaunchKernel(
+		dCoData, dKernArgData, dPacket := b.driver.EnqueueLaunchKernel(
 			q,
 			b.hsaco,
 			[3]uint32{uint32(numWI), 1, 1},
 			[3]uint16{64, 1, 1},
 			&kernArg,
 		)
+
+		allCoData = append(allCoData, dCoData)
+        allKernArgData = append(allKernArgData, dKernArgData)
+        allPackets = append(allPackets, dPacket)
 	}
 
 	for _, q := range queues {
 		b.driver.DrainCommandQueue(q)
 	}
 
+	for _, ptr := range allCoData {
+        if ptr != 0 { 
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+    for _, ptr := range allKernArgData {
+        if ptr != 0 {
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+
 	b.driver.MemCopyD2H(b.context, b.outputData, b.gOutputData)
+
+	for _, ptr := range allPackets {
+        if ptr != 0 {
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+
+	b.driver.FreeMemory(b.context, b.gInputData)
 }
 
 // Verify verifies

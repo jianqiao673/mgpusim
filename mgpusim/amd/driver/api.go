@@ -152,10 +152,10 @@ func (d *Driver) AllocateMemory(
 		l2Dirty: false,
 	})
 
-	allocateReq.SetVAddr(pAddr)
+	allocateReq.SetAddress(pAddr)
 	tracing.TraceReqFinalize(allocateReq, d)
 
-	log.Printf("[Allocate] pid: %d, deviceid: %d, vAddr: 0x%x, pAddr: 0x%x\n", ctx.pid, ctx.currentGPUID, ptr, pAddr)
+	log.Printf("[Allocate] pid: %d, deviceid: %d, vAddr: 0x%x, pAddr: 0x%x\n, byteSize: %d", ctx.pid, ctx.currentGPUID, ptr, pAddr, byteSize)
 	return Ptr(ptr)
 }
 
@@ -180,7 +180,7 @@ func (d *Driver) AllocateUnifiedMemory(
 		l2Dirty: false,
 	})
 
-	allocateReq.SetVAddr(pAddr)
+	allocateReq.SetAddress(pAddr)
 	tracing.TraceReqFinalize(allocateReq, d)
 
 	return Ptr(ptr)
@@ -229,26 +229,30 @@ func unique(in []int) []int {
 // with the function AllocateMemory earlier. Error will be returned if the ptr
 // provided is invalid.
 func (d *Driver) FreeMemory(ctx *Context, ptr Ptr) error {
-	
-	freeReq := mem.FreeReqBuilder{}.
-	WithDeviceID(uint64(ctx.currentGPUID)).
-	WithPID(ctx.pid).
-	WithVAddr(uint64(ptr)).
-	Build()
-	tracing.TraceReqInitiate(freeReq, d, tracing.MsgIDAtReceiver(freeReq, d))
-	
-	pAddr := d.memAllocator.Free(uint64(ptr))
-	
 	for i, buffer := range ctx.buffers {
 		if buffer.vAddr == ptr {
+			freeReq := mem.FreeReqBuilder{}.
+			WithDeviceID(uint64(ctx.currentGPUID)).
+			WithPID(ctx.pid).
+			WithByteSize(buffer.size).
+			Build()
+			tracing.TraceReqInitiate(freeReq, d, tracing.MsgIDAtReceiver(freeReq, d))
+			
+			endVAddr := uint64(ptr) + uint64(buffer.size)
+			for vAddr := uint64(ptr); vAddr < endVAddr; vAddr += 1 << d.Log2PageSize {
+				if vAddr == uint64(ptr) {
+					pAddr := d.memAllocator.Free(uint64(vAddr))
+					freeReq.SetAddress(pAddr)
+				} else {
+					d.memAllocator.RemovePage(uint64(vAddr))
+				}
+			}
 			ctx.buffers[i].freed = true
+			
+			tracing.TraceReqFinalize(freeReq, d)
+			log.Printf("[Free] pid: %d, deviceid: %d, vAddr: 0x%x, byteSize: %d\n", ctx.pid, ctx.currentGPUID, ptr, buffer.size)
 		}
 	}
-	
-	freeReq.SetVAddr(pAddr)
-	tracing.TraceReqFinalize(freeReq, d)
-	
-	log.Printf("[Free] pid: %d, deviceid: %d, vAddr: 0x%x, pAddr: 0x%x\n", ctx.pid, ctx.currentGPUID, ptr, pAddr)
 	return nil
 }
 

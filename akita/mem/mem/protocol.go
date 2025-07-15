@@ -535,7 +535,7 @@ type AllocateReq struct {
 
 	DeviceID uint64
 	PID vm.PID
-	VAddr uint64
+	Address uint64 // Physical address of the allocated memory
 	ByteSize uint64
 }
 
@@ -561,15 +561,15 @@ func (r *AllocateReq) GetPID() vm.PID {
 }
 
 func (r *AllocateReq) GetAddress() uint64 {
-	return r.VAddr
+	return r.Address
 }
 
 func (r *AllocateReq) GetByteSize() uint64 {
 	return r.ByteSize
 }
 
-func (r *AllocateReq) SetVAddr(vAddr uint64) {
-	r.VAddr = vAddr
+func (r *AllocateReq) SetAddress(address uint64) {
+	r.Address = address
 }
 
 
@@ -608,58 +608,14 @@ func (b AllocateReqBuilder) Build() *AllocateReq {
 	return r
 }
 
-type AllocateDoneRsp struct {
-	sim.MsgMeta
-
-	DeviceID uint64
-	PID vm.PID
-	ByteSize uint64
-
-	VAddr uint64 // The start virtual address of the allocated memory
-	RspTo string // The ID of the request that the respond is responding to
-}
-
-// Meta returns the message meta.
-func (r *AllocateDoneRsp) Meta() *sim.MsgMeta {
-	return &r.MsgMeta
-}
-
-// Clone returns cloned ReadReq with different ID
-func (r *AllocateDoneRsp) Clone() sim.Msg {
-	cloneMsg := *r
-	cloneMsg.ID = sim.GetIDGenerator().Generate()
-
-	return &cloneMsg
-}
-
-// GetRspTo returns the ID of the request that the respond is responding to.
-func (r *AllocateDoneRsp) GetRspTo() string {
-	return r.RspTo
-}
-
-func (r *AllocateDoneRsp) GetDeviceID() uint64 {
-	return r.DeviceID
-}
-
-func (r *AllocateDoneRsp) GetPID() vm.PID {
-	return r.PID
-}
-
-func (r *AllocateDoneRsp) GetAddress() uint64 {
-	return 0
-}
-
-func (r *AllocateDoneRsp) GetByteSize() uint64 {
-	return r.ByteSize
-}
-
 // A FreeReq is a request sent to a memory allocator to free memory
 type FreeReq struct {
 	sim.MsgMeta
 
 	DeviceID uint64
 	PID vm.PID
-	VAddr uint64
+	Address uint64 // Physical address of the memory to free
+	ByteSize uint64
 }
 
 // Meta returns the message meta.
@@ -684,21 +640,21 @@ func (r *FreeReq) GetPID() vm.PID {
 }
 
 func (r *FreeReq) GetAddress() uint64 {
-	return r.VAddr
+	return r.Address
 }
 
 func (r *FreeReq) GetByteSize() uint64 {
-	return 0
+	return r.ByteSize
 }
 
-func (r *FreeReq) SetVAddr(vAddr uint64) {
-	r.VAddr = vAddr
+func (r *FreeReq) SetAddress(address uint64) {
+	r.Address = address
 }
 
 type FreeReqBuilder struct {
 	deviceID uint64
 	pid vm.PID
-	vAddr uint64
+	byteSize uint64
 }
 
 // WithDeviceID sets the DeviceID of the request to build.
@@ -713,9 +669,9 @@ func (b FreeReqBuilder) WithPID(pid vm.PID) FreeReqBuilder {
 	return b
 }
 
-// WithVAddr sets the virtual address of the request to build.
-func (b FreeReqBuilder) WithVAddr(vAddr uint64) FreeReqBuilder {
-	b.vAddr = vAddr
+// WithByteSize sets the byte size of the request to build.
+func (b FreeReqBuilder) WithByteSize(byteSize uint64) FreeReqBuilder {
+	b.byteSize = byteSize
 	return b
 }
 
@@ -725,7 +681,7 @@ func (b FreeReqBuilder) Build() *FreeReq {
 	r.ID = sim.GetIDGenerator().Generate()
 	r.DeviceID = b.deviceID
 	r.PID = b.pid
-	r.VAddr = b.vAddr
+	r.ByteSize = b.byteSize
 
 	return r
 }

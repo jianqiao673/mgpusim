@@ -2,6 +2,7 @@ package driver
 
 import (
 	"encoding/binary"
+	"log"
 	"reflect"
 
 	"github.com/sarchlab/akita/v4/sim"
@@ -17,13 +18,14 @@ func (d *Driver) EnqueueLaunchKernel(
 	gridSize [3]uint32,
 	wgSize [3]uint16,
 	kernelArgs interface{},
-) {
+) (dCoData, dKernArgData, dPacket Ptr) {
 	dev := d.devices[queue.GPUID]
 
 	if dev.Type == internal.DeviceTypeUnifiedGPU {
 		d.enqueueLaunchUnifiedKernel(queue, co, gridSize, wgSize, kernelArgs)
+		panic("unified kernel not supported yet")
 	} else {
-		dCoData, dKernArgData, dPacket := d.allocateGPUMemory(queue.Context, co)
+		dCoData, dKernArgData, dPacket = d.allocateGPUMemory(queue.Context, co)
 
 		packet := d.createAQLPacket(gridSize, wgSize, dCoData, dKernArgData)
 		newKernelArgs := d.prepareLocalMemory(co, kernelArgs, packet)
@@ -33,6 +35,8 @@ func (d *Driver) EnqueueLaunchKernel(
 		d.EnqueueMemCopyH2D(queue, dPacket, packet)
 
 		d.enqueueLaunchKernelCommand(queue, co, packet, dPacket)
+
+		return dCoData, dKernArgData, dPacket
 	}
 }
 
@@ -46,6 +50,8 @@ func (d *Driver) allocateGPUMemory(
 	packet := kernels.HsaKernelDispatchPacket{}
 	dPacket = d.AllocateMemory(ctx, uint64(binary.Size(packet)))
 
+	log.Printf("dCoData: 0x%x, dKernArgData: 0x%x, dPacket: 0x%x\n",
+		dCoData, dKernArgData, dPacket)
 	return dCoData, dKernArgData, dPacket
 }
 
@@ -109,6 +115,7 @@ func (d *Driver) createAQLPacket(
 	packet.WorkgroupSizeZ = wgSize[2]
 	packet.KernelObject = uint64(dCoData)
 	packet.KernargAddress = uint64(dKernArgData)
+	
 	return packet
 }
 

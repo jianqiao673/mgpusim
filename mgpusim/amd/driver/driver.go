@@ -662,7 +662,7 @@ func (d *Driver) findRequestingGPUs(
 func (d *Driver) findContext(pid vm.PID) *Context {
 	context := &Context{}
 	for i := 0; i < len(d.contexts); i++ {
-		if d.contexts[i].pid == d.currentPageMigrationReq.PID {
+		if d.contexts[i].pid == pid {
 			context = d.contexts[i]
 		}
 	}

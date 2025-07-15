@@ -2,7 +2,7 @@
 
 # 设置默认值
 DEFAULT_PROGRAM="relu"
-DEFAULT_ARGS="-timing -trace-vis"
+DEFAULT_ARGS="-timing -trace-vis -verify"
 
 # 显示帮助信息
 usage() {
@@ -43,6 +43,11 @@ echo "Executing: $CMD" >&2
 
 # 执行命令并重定向输出
 eval "$CMD" &> "log/${PROGRAM}.txt"
+
+# 将运行结果移动到plot/data
+DST="../../../../plot/data/$PROGRAM/"
+mkdir -p $DST
+mv akita_sim_**.sqlite3 $DST
 
 # 打印完成信息
 echo "Execution completed. Output saved to log/${PROGRAM}.txt" >&2

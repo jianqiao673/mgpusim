@@ -146,13 +146,14 @@ func (b *Benchmark) exec() {
         }
     }
 
-	b.driver.MemCopyD2H(b.context, b.outputData, b.gOutputData)
-
 	for _, ptr := range allPackets {
         if ptr != 0 {
             b.driver.FreeMemory(b.context, ptr)
         }
     }
+	
+	b.driver.MemCopyD2H(b.context, b.outputData, b.gOutputData)
+
 
 	b.driver.FreeMemory(b.context, b.gInputData)
 }

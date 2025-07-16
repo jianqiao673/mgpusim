@@ -27,6 +27,7 @@ type Context struct {
 	queueMutex sync.Mutex
 	queues     []*CommandQueue
 
+	buffersMutex sync.Mutex // Add a mutex lock to the Context structure to protect concurrent access to buffers.
 	buffers []*buffer
 }
 
@@ -43,9 +44,14 @@ func (c *Context) markAllBuffersClean() {
 }
 
 func (c *Context) removeFreedBuffers() {
-	for i, b := range c.buffers {
-		if b.freed {
-			c.buffers = append(c.buffers[:i], c.buffers[i+1:]...)
-		}
-	}
+	c.buffersMutex.Lock()
+    defer c.buffersMutex.Unlock()
+
+	newBuffers := make([]*buffer, 0, len(c.buffers))
+    for _, b := range c.buffers {
+        if !b.freed {
+            newBuffers = append(newBuffers, b)
+        }
+    }
+    c.buffers = newBuffers
 }

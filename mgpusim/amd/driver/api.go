@@ -232,10 +232,10 @@ func (d *Driver) FreeMemory(ctx *Context, ptr Ptr) error {
 	for i, buffer := range ctx.buffers {
 		if buffer.vAddr == ptr {
 			freeReq := mem.FreeReqBuilder{}.
-			WithDeviceID(uint64(ctx.currentGPUID)).
-			WithPID(ctx.pid).
-			WithByteSize(buffer.size).
-			Build()
+				WithDeviceID(uint64(ctx.currentGPUID)).
+				WithPID(ctx.pid).
+				WithByteSize(buffer.size).
+				Build()
 			tracing.TraceReqInitiate(freeReq, d, tracing.MsgIDAtReceiver(freeReq, d))
 			
 			endVAddr := uint64(ptr) + uint64(buffer.size)
@@ -244,7 +244,7 @@ func (d *Driver) FreeMemory(ctx *Context, ptr Ptr) error {
 					pAddr := d.memAllocator.Free(uint64(vAddr))
 					freeReq.SetAddress(pAddr)
 				} else {
-					d.memAllocator.RemovePage(uint64(vAddr))
+					d.memAllocator.Free(uint64(vAddr))
 				}
 			}
 			ctx.buffers[i].freed = true

@@ -79,6 +79,15 @@ func (b Builder) Build(name string) *CommandProcessor {
 	cp.bottomMemCopyD2HReqIDToTopReqMap =
 		make(map[string]*protocol.MemCopyD2HReq)
 
+	cp.memCopyH2DCmdIDToPAddrMap = 
+		make(map[string]uint64) // Map from command ID to physical address for H2D memory copy
+
+	cp.isSendMemoryAllocateTriggerMap =
+		make(map[string]bool) // Map to track if memory allocation trigger has been sent with key of command ID
+
+	cp.awaitingMemCopyH2DReqsMap = 
+		make(map[string][]*protocol.MemCopyH2DReq) // Map to track awaiting H2D memory copy requests
+
 	b.buildDispatchers(cp)
 
 	if b.perfAnalyzer != nil {

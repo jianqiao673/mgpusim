@@ -54,6 +54,8 @@ type Builder struct {
 	l1AddressMapper    *mem.InterleavedAddressPortMapper
 	l1TLBAddressMapper *mem.SinglePortMapper
 	pmcAddressMapper   mem.AddressToPortMapper
+
+	driverPort sim.Port
 }
 
 // MakeBuilder creates a new builder.
@@ -171,6 +173,11 @@ func (b Builder) WithRDMAAddressMapper(mapper mem.AddressToPortMapper) Builder {
 	return b
 }
 
+func (b Builder) WithDriverPort(driverPort sim.Port) Builder {
+	b.driverPort = driverPort
+	return b
+}
+
 // Build builds the hardware platform.
 func (b Builder) Build(name string) *sim.Domain {
 	b.name = name
@@ -237,6 +244,8 @@ func (b *Builder) connectCP() {
 	pmcControlPort := b.pmc.GetPortByName("Control")
 	b.cp.PMC = pmcControlPort
 	b.internalConn.PlugIn(pmcControlPort)
+
+	b.cp.Driver = b.driverPort
 
 	b.connectCPWithCUs()
 	b.connectCPWithAddressTranslators()

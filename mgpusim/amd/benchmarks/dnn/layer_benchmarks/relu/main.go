@@ -77,17 +77,18 @@ func (b *Benchmark) initMem() {
 		b.gOutputData = b.driver.AllocateUnifiedMemory(b.context,
 			uint64(b.Length*4))
 	} else {
-		b.gInputData = b.driver.AllocateMemory(b.context, uint64(b.Length*4))
-		b.driver.Distribute(b.context, b.gInputData, uint64(b.Length*4), b.gpus)
+		// b.gInputData = b.driver.AllocateMemory(b.context, uint64(b.Length*4))
+		// b.driver.Distribute(b.context, b.gInputData, uint64(b.Length*4), b.gpus)
 
 		// b.gOutputData = b.driver.AllocateMemory(b.context, uint64(b.Length*4))
 		// b.driver.Distribute(b.context, b.gOutputData,
 		// 	uint64(b.Length*4), b.gpus)
-		b.gOutputData = b.gInputData
+		
+		// b.gOutputData = b.gInputData
 	}
 
-	log.Printf("gInputData: 0x%x, gOutputData: 0x%x\n",
-		b.gInputData, b.gOutputData)
+	// log.Printf("gInputData: 0x%x, gOutputData: 0x%x\n",
+		// b.gInputData, b.gOutputData)
 
 	b.inputData = make([]float32, b.Length)
 	b.outputData = make([]float32, b.Length)
@@ -95,7 +96,10 @@ func (b *Benchmark) initMem() {
 		b.inputData[i] = float32(i) - 0.5
 	}
 
-	b.driver.MemCopyH2D(b.context, b.gInputData, b.inputData)
+	// b.driver.MemCopyH2D(b.context, b.gInputData, b.inputData)
+	b.driver.LazyMemCopyH2D(b.context, b.gInputData, b.inputData, uint64(b.Length*4))
+	b.gInputData = b.driver.AllocatedVAddr
+	b.gOutputData = b.gInputData
 }
 
 func (b *Benchmark) exec() {
@@ -151,7 +155,7 @@ func (b *Benchmark) exec() {
             b.driver.FreeMemory(b.context, ptr)
         }
     }
-	
+
 	b.driver.MemCopyD2H(b.context, b.outputData, b.gOutputData)
 
 

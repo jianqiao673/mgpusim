@@ -59,6 +59,9 @@ type Driver struct {
 	isCurrentlyMigratingOnePage     bool
 
 	RemotePMCPorts []sim.Port
+
+	memoryAllocateReqMap map[string]*mem.AllocateReq
+	AllocatedVAddr Ptr
 }
 
 // Run starts a new threads that handles all commands in the command queues
@@ -175,6 +178,8 @@ func (d *Driver) Tick() bool {
 	madeProgress = d.processReturnReq() || madeProgress
 	madeProgress = d.processNewCommand() || madeProgress
 	madeProgress = d.parseFromMMU() || madeProgress
+
+	madeProgress = d.processAllocateTrg() || madeProgress
 
 	return madeProgress
 }
@@ -813,4 +818,57 @@ func (d *Driver) sendToMMU() bool {
 	}
 
 	return false
+}
+
+//nolint:gocyclo
+func (d *Driver) processAllocateTrg() bool {
+	trg := d.gpuPort.PeekIncoming()
+	if trg == nil {
+		return false
+	}
+
+	switch trg := trg.(type) {
+	case *protocol.MemoryAllocateTrigger:
+		d.gpuPort.RetrieveIncoming()
+		return d.LazyAllocateMemory(trg)
+	}
+
+	return false
+}
+
+func (d *Driver) LazyAllocateMemory(trg *protocol.MemoryAllocateTrigger) bool {
+	if trg == nil {
+		log.Panic("Memory allocate trigger is nil")
+	}
+
+	if d.memoryAllocateReqMap == nil {
+		log.Panic("Memory allocate request map is not initialized")
+	}
+
+
+	allocateReq := d.memoryAllocateReqMap[trg.MemCopyH2DCmdID]
+	
+	if allocateReq == nil {
+		return false
+		// log.Panicf("Memory allocate request with ID %s not found",
+			// trg.MemCopyH2DCmdID)
+	} 
+
+
+	ctx := d.findContext(allocateReq.PID)
+	vAddr, pAddr := d.AllocateMemory2(ctx, allocateReq.ByteSize)
+	d.AllocatedVAddr = vAddr
+
+	tracing.TraceReqFinalize(trg, d)
+	// d.Distribute(ctx, dst, allocateReq.ByteSize, allocateReq.GPUIDs) // TODO: without using Distribute
+	
+	rsp := protocol.NewMemoryAllocateRsp(
+		d.gpuPort.AsRemote(), trg.Src, trg.MemCopyH2DCmdID, uint64(vAddr), pAddr) // TODO: d.gpuPort.AsRemote() or trg.Dst
+		
+	err := d.gpuPort.Send(rsp)
+	if err == nil {
+		tracing.TraceReqInitiate(rsp, d, rsp.ID) // TODO: CP cannot receive this
+	}
+
+	return true
 }

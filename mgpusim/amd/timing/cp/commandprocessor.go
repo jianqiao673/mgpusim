@@ -1,6 +1,8 @@
 package cp
 
 import (
+	"log"
+
 	"github.com/sarchlab/akita/v4/mem/cache"
 	"github.com/sarchlab/akita/v4/mem/idealmemcontroller"
 	"github.com/sarchlab/akita/v4/mem/mem"
@@ -59,6 +61,10 @@ type CommandProcessor struct {
 	bottomKernelLaunchReqIDToTopReqMap map[string]*protocol.LaunchKernelReq
 	bottomMemCopyH2DReqIDToTopReqMap   map[string]*protocol.MemCopyH2DReq
 	bottomMemCopyD2HReqIDToTopReqMap   map[string]*protocol.MemCopyD2HReq
+
+	memCopyH2DCmdIDToPAddrMap map[string]uint64
+	isSendMemoryAllocateTriggerMap map[string]bool
+	awaitingMemCopyH2DReqsMap map[string][]*protocol.MemCopyH2DReq
 }
 
 // CUInterfaceForCP defines the interface that a CP requires from CU.
@@ -85,6 +91,7 @@ func (p *CommandProcessor) Tick() bool {
 	madeProgress = p.tickDispatchers() || madeProgress
 	madeProgress = p.processReqFromDriver() || madeProgress
 	madeProgress = p.processRspFromInternal() || madeProgress
+	// madeProgress = p.processRspFromDriver() || madeProgress
 
 	return madeProgress
 }
@@ -109,7 +116,8 @@ func (p *CommandProcessor) processReqFromDriver() bool {
 	case *protocol.FlushReq:
 		return p.processFlushReq(req)
 	case *protocol.MemCopyD2HReq, *protocol.MemCopyH2DReq:
-		return p.processMemCopyReq(req)
+		// return p.processMemCopyReq(req)
+		return p.prePorcessMemCopyReq(req)
 	case *protocol.RDMADrainCmdFromDriver:
 		return p.processRDMADrainCmd(req)
 	case *protocol.RDMARestartCmdFromDriver:
@@ -120,6 +128,8 @@ func (p *CommandProcessor) processReqFromDriver() bool {
 		return p.processGPURestartReq(req)
 	case *protocol.PageMigrationReqToCP:
 		return p.processPageMigrationReq(req)
+	case *protocol.MemoryAllocateRsp:
+		return p.processMemoryAllocateRsp(req)
 	}
 
 	panic("never")
@@ -247,6 +257,20 @@ func (p *CommandProcessor) processRspFromPMC() bool {
 
 	panic("never")
 }
+
+// func (p *CommandProcessor) processRspFromDriver() bool {
+// 	msg := p.ToDriver.PeekIncoming()
+// 	if msg == nil {
+// 		return false
+// 	}
+
+// 	switch req := msg.(type) {
+// 	case *protocol.MemoryAllocateRsp:
+// 		return p.processMemoryAllocateRsp(req)
+// 	}
+
+// 	panic("never")
+// }
 
 func (p *CommandProcessor) processLaunchKernelReq(
 	req *protocol.LaunchKernelReq,
@@ -742,7 +766,7 @@ func (p *CommandProcessor) processMemCopyReq(
 	if p.numCacheACK > 0 {
 		return false
 	}
-
+	
 	var cloned sim.Msg
 	switch req := req.(type) {
 	case *protocol.MemCopyH2DReq:
@@ -757,7 +781,7 @@ func (p *CommandProcessor) processMemCopyReq(
 	cloned.Meta().Src = p.ToDMA.AsRemote()
 
 	p.ToDMA.Send(cloned)
-	p.ToDriver.RetrieveIncoming()
+	// p.ToDriver.RetrieveIncoming()
 
 	tracing.TraceReqReceive(req, p)
 	tracing.TraceReqInitiate(cloned, p, tracing.MsgIDAtReceiver(req, p))
@@ -804,3 +828,77 @@ func (p *CommandProcessor) processMemCopyRsp(
 
 	return true
 }
+
+func (p *CommandProcessor) sendMemoryAllocateTrigger(req *protocol.MemCopyH2DReq) bool {
+	if req == nil {
+		return false
+	}
+
+	trg := protocol.NewMemoryAllocateTrigger(
+		p.ToDriver, p.Driver,
+		req.CmdID,
+	)
+
+	err := p.ToDriver.Send(trg)
+	if err != nil {
+		panic(err)
+	}
+
+	p.isSendMemoryAllocateTriggerMap[req.CmdID] = true
+
+	return true
+}
+
+func (p *CommandProcessor) processMemoryAllocateRsp(req *protocol.MemoryAllocateRsp) bool {
+	if req == nil {
+		return false
+	}
+
+	p.ToDriver.RetrieveIncoming()
+
+	p.memCopyH2DCmdIDToPAddrMap[req.MemCopyH2DCmdID] = req.PAddr
+
+	tracing.TraceReqFinalize(req, p)
+
+	ok := false
+	for _, h2dReq := range p.awaitingMemCopyH2DReqsMap[req.MemCopyH2DCmdID] {
+		h2dReq.DstAddress += req.PAddr
+		log.Printf("Processing H2D request %s with PAddr 0x%x", h2dReq.ID, h2dReq.DstAddress)
+		ok = p.processMemCopyReq(h2dReq)
+	}
+
+	return ok
+}
+
+
+func (p *CommandProcessor) prePorcessMemCopyReq(req sim.Msg) bool {
+	if p.numCacheACK > 0 {
+		return false
+	}
+	
+	p.ToDriver.RetrieveIncoming()
+	
+	switch req := req.(type) {
+	case *protocol.MemCopyH2DReq:
+		if req.CmdID == "" {
+			return p.processMemCopyReq(req)
+		}
+		_, ok := p.memCopyH2DCmdIDToPAddrMap[req.CmdID]
+		isSend, ok2 := p.isSendMemoryAllocateTriggerMap[req.CmdID]
+		if !ok {
+			if !ok2 || !isSend {
+				p.sendMemoryAllocateTrigger(req)
+			}
+			p.awaitingMemCopyH2DReqsMap[req.CmdID] = append(
+				p.awaitingMemCopyH2DReqsMap[req.CmdID], req)
+
+			return false
+		} else {
+			return p.processMemCopyReq(req)
+		}
+	case *protocol.MemCopyD2HReq:
+		return p.processMemCopyReq(req)
+	default:
+		panic("unknown type")
+	}
+}  		

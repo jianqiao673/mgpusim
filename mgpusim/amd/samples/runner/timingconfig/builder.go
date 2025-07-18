@@ -238,6 +238,7 @@ func (b *Builder) createGPU(
 		WithGPUID(uint64(index)).
 		WithMemAddrOffset(memAddrOffset).
 		WithRDMAAddressMapper(b.rdmaAddressMapper).
+		WithDriverPort(gpuDriver.GetPortByName("GPU")).
 		Build(name)
 
 	gpuDriver.RegisterGPU(

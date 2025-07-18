@@ -21,6 +21,7 @@ type MemCopyH2DCommand struct {
 	Dst  Ptr
 	Src  interface{}
 	Reqs []sim.Msg
+	IsLazy bool
 }
 
 // GetID returns the ID of the command

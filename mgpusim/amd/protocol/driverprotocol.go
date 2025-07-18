@@ -113,6 +113,7 @@ type MemCopyH2DReq struct {
 	sim.MsgMeta
 	SrcBuffer  []byte
 	DstAddress uint64
+	CmdID      string
 }
 
 // Meta returns the meta data associated with the message.
@@ -133,6 +134,7 @@ func NewMemCopyH2DReq(
 	src, dst sim.Port,
 	srcBuffer []byte,
 	dstAddress uint64,
+	cmdID string,
 ) *MemCopyH2DReq {
 	req := new(MemCopyH2DReq)
 	req.ID = sim.GetIDGenerator().Generate()
@@ -141,6 +143,7 @@ func NewMemCopyH2DReq(
 	req.Dst = dst.AsRemote()
 	req.SrcBuffer = srcBuffer
 	req.DstAddress = dstAddress
+	req.CmdID = cmdID
 	return req
 }
 
@@ -511,4 +514,75 @@ func NewRDMARestartRspToDriver(
 	cmd.Src = src.AsRemote()
 	cmd.Dst = dst.AsRemote()
 	return cmd
+}
+
+// MemoryAllocateTrigger is a trigger that is sent to the memory allocator to allocate memory
+type MemoryAllocateTrigger struct {
+	sim.MsgMeta
+
+	MemCopyH2DCmdID string
+}
+
+// Meta returns the meta data associated with the message.
+func (m *MemoryAllocateTrigger) Meta() *sim.MsgMeta {			
+	return &m.MsgMeta
+}
+
+// Clone returns a clone of the MemoryAllocateTrigger with different ID.
+func (m *MemoryAllocateTrigger) Clone() sim.Msg {
+	cloneMsg := *m
+	cloneMsg.ID = sim.GetIDGenerator().Generate()
+
+	return &cloneMsg
+}
+
+// NewMemoryAllocateTrigger creates a new MemoryAllocateTrigger
+func NewMemoryAllocateTrigger(	
+	src, dst sim.Port,
+	memCopyH2DCmdID string,
+) *MemoryAllocateTrigger {
+	trg := new(MemoryAllocateTrigger)
+	trg.ID = sim.GetIDGenerator().Generate()
+	trg.Src = src.AsRemote()
+	trg.Dst = dst.AsRemote()
+	trg.MemCopyH2DCmdID = memCopyH2DCmdID
+	return trg
+}
+
+// MemoryAllocateRsp is a response to the memory allocation trigger
+type MemoryAllocateRsp struct {
+	sim.MsgMeta
+
+	MemCopyH2DCmdID string
+	VAddr            uint64
+	PAddr            uint64
+}
+
+// Meta returns the meta data associated with the message.
+func (m *MemoryAllocateRsp) Meta() *sim.MsgMeta {
+	return &m.MsgMeta
+}
+
+// Clone returns a clone of the MemoryAllocateRsp with different ID.
+func (m *MemoryAllocateRsp) Clone() sim.Msg {
+	cloneMsg := *m
+	cloneMsg.ID = sim.GetIDGenerator().Generate()
+
+	return &cloneMsg
+}
+
+// NewMemoryAllocateRsp creates a new MemoryAllocateRsp
+func NewMemoryAllocateRsp(	
+	src, dst sim.RemotePort,
+	memCopyH2DCmdID string,
+	vAddr, pAddr uint64,
+) *MemoryAllocateRsp {
+	rsp := new(MemoryAllocateRsp)
+	rsp.ID = sim.GetIDGenerator().Generate()
+	rsp.Src = src
+	rsp.Dst = dst
+	rsp.MemCopyH2DCmdID = memCopyH2DCmdID
+	rsp.VAddr = vAddr
+	rsp.PAddr = pAddr
+	return rsp
 }

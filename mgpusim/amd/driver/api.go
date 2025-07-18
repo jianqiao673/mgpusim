@@ -331,3 +331,79 @@ func (d *Driver) MemCopyD2D(ctx *Context, dst Ptr, src Ptr, num int) {
 	d.EnqueueMemCopyD2D(queue, dst, src, num)
 	d.DrainCommandQueue(queue)
 }
+
+// EnmapMemAlloc registers a memory allocation request for the MemCopyH2D
+func (d *Driver) EnmapMemAlloc(
+	ctx *Context,
+	byteSize uint64,
+	memCopyH2DCmdID string,
+) {
+	allocateReq := mem.AllocateReqBuilder{}.
+		WithDeviceID(uint64(ctx.currentGPUID)).
+		WithPID(ctx.pid).
+		WithByteSize(byteSize).
+		Build()
+
+	if d.memoryAllocateReqMap == nil {
+        d.memoryAllocateReqMap = make(map[string]*mem.AllocateReq)
+    }
+
+	d.memoryAllocateReqMap[memCopyH2DCmdID] = allocateReq
+}
+
+// LazyEnqueueMemCopyH2D registers a MemCopyH2DCommand in the queue,
+// and enmaps the memory allocation request for the command.
+func (d *Driver) LazyEnqueueMemCopyH2D(
+	queue *CommandQueue,
+	dst Ptr,
+	src interface{},
+	byteSize uint64,
+) {
+	cmd := &MemCopyH2DCommand{
+		ID:  sim.GetIDGenerator().Generate(),
+		Dst: dst,
+		Src: src,
+		IsLazy: true,
+	}
+
+	d.Enqueue(queue, cmd)
+
+	d.EnmapMemAlloc(queue.Context, byteSize, cmd.ID)
+}
+
+// LazyMemCopyH2D copies a memory from the host to a GPU device,
+// and enmaps the memory allocation request for the command.
+func (d *Driver) LazyMemCopyH2D(ctx *Context, dst Ptr, src interface{}, byteSize uint64) {
+	queue := d.CreateCommandQueue(ctx)
+	d.LazyEnqueueMemCopyH2D(queue, dst, src, byteSize)
+	d.DrainCommandQueue(queue)
+}
+
+// LazyAllocateMemory allocates a memory in the GPU device
+// and returns both	virtual address and physical address.
+func (d *Driver) AllocateMemory2(
+	ctx *Context,
+	byteSize uint64,
+) (Ptr, uint64) {
+	allocateReq := mem.AllocateReqBuilder{}.
+		WithDeviceID(uint64(ctx.currentGPUID)).
+		WithPID(ctx.pid).
+		WithByteSize(byteSize).
+		Build()
+	tracing.TraceReqInitiate(allocateReq, d, tracing.MsgIDAtReceiver(allocateReq, d))
+
+	ptr, pAddr := d.memAllocator.Allocate(ctx.pid, byteSize, ctx.currentGPUID)
+
+	ctx.buffers = append(ctx.buffers, &buffer{
+		vAddr:   Ptr(ptr),
+		size:    byteSize,
+		freed:   false,
+		l2Dirty: false,
+	})
+
+	allocateReq.SetAddress(pAddr)
+	tracing.TraceReqFinalize(allocateReq, d)
+
+	log.Printf("[Allocate] pid: %d, deviceid: %d, vAddr: 0x%x, pAddr: 0x%x\n, byteSize: %d", ctx.pid, ctx.currentGPUID, ptr, pAddr, byteSize)
+	return Ptr(ptr), pAddr
+}

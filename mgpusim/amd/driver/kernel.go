@@ -186,3 +186,30 @@ func (d *Driver) enqueueLaunchUnifiedKernel(
 	queue.Context.currentGPUID = initGPUID
 	d.enqueueLaunchUnifiedKernelCommand(queue, co, packetArray, dPacketArray)
 }
+
+// // EnqueueLaunchKernel schedules kernel to be launched later
+// func (d *Driver) LazyEnqueueLaunchKernel(
+// 	queue *CommandQueue,
+// 	co *insts.HsaCo,
+// 	gridSize [3]uint32,
+// 	wgSize [3]uint16,
+// 	kernelArgs interface{},
+// ) (dCoData, dKernArgData, dPacket Ptr) {
+// 	dev := d.devices[queue.GPUID]
+
+// 	dCoData, dKernArgData, dPacket = d.allocateGPUMemory(queue.Context, co)
+
+// 	packet := d.createAQLPacket(gridSize, wgSize, dCoData, dKernArgData)
+// 	newKernelArgs := d.prepareLocalMemory(co, kernelArgs, packet)
+
+// 	d.EnqueueMemCopyH2D(queue, dCoData, co.Data)
+// 	d.EnqueueMemCopyH2D(queue, dKernArgData, newKernelArgs)
+// 	d.EnqueueMemCopyH2D(queue, dPacket, packet)
+
+// 	d.enqueueLaunchKernelCommand(queue, co, packet, dPacket)
+
+// 	return dCoData, dKernArgData, dPacket
+// }
+
+
+// d.LazyEnqueueMemCopyH2D(queue, dst, src, byteSize)

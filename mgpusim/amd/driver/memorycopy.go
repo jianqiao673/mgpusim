@@ -26,7 +26,11 @@ func (m *defaultMemoryCopyMiddleware) ProcessCommand(
 ) (processed bool) {
 	switch cmd := cmd.(type) {
 	case *MemCopyH2DCommand:
-		return m.processMemCopyH2DCommand(cmd, queue)
+		if !cmd.IsLazy {
+			return m.processMemCopyH2DCommand(cmd, queue)
+		} else {
+			return m.lazyProcessMemCopyH2DCommand(cmd, queue)
+		}
 	case *MemCopyD2HCommand:
 		return m.processMemCopyD2HCommand(cmd, queue)
 	}
@@ -69,7 +73,7 @@ func (m *defaultMemoryCopyMiddleware) processMemCopyH2DCommand(
 		req := protocol.NewMemCopyH2DReq(
 			m.driver.gpuPort, m.driver.GPUs[gpuID-1],
 			rawBytes[offset:offset+sizeToCopy],
-			pAddr)
+			pAddr, "")
 		cmd.Reqs = append(cmd.Reqs, req)
 		m.awaitingReqs = append(m.awaitingReqs, req)
 		// m.driver.requestsToSend = append(m.driver.requestsToSend, req)
@@ -294,6 +298,56 @@ func (m *defaultMemoryCopyMiddleware) processFlushReturn(
 	cmd.RemoveReq(req)
 
 	m.driver.logTaskToGPUClear(req)
+
+	return true
+}
+
+func (m *defaultMemoryCopyMiddleware) lazyProcessMemCopyH2DCommand(
+	cmd *MemCopyH2DCommand,
+	queue *CommandQueue,
+) bool {
+	if m.needFlushing(queue.Context, cmd.Dst, uint64(binary.Size(cmd.Src))) {
+		m.sendFlushRequest(cmd)
+	}
+
+	buffer := bytes.NewBuffer(nil)
+	err := binary.Write(buffer, binary.LittleEndian, cmd.Src)
+	if err != nil {
+		panic(err)
+	}
+	rawBytes := buffer.Bytes()
+
+	offset := uint64(0)
+	addr := uint64(cmd.Dst)
+	sizeLeft := uint64(len(rawBytes))
+	pageSize := uint64(1 << m.driver.Log2PageSize)
+	endAddr := addr + sizeLeft
+	for sizeLeft > 0 {
+		sizeToCopy := pageSize
+		if addr + sizeToCopy > endAddr {
+			sizeToCopy = endAddr - offset
+		}
+
+		// gpuID := m.driver.memAllocator.GetDeviceIDByPAddr(pAddr)
+		gpuID := 1 // Hardcoded for now, as we don't have a real GPU ID in this context
+		req := protocol.NewMemCopyH2DReq(
+			m.driver.gpuPort, m.driver.GPUs[gpuID-1],
+			rawBytes[offset:offset+sizeToCopy],
+			addr, cmd.ID)
+		cmd.Reqs = append(cmd.Reqs, req)
+		m.awaitingReqs = append(m.awaitingReqs, req)
+		// m.driver.requestsToSend = append(m.driver.requestsToSend, req)
+
+		sizeLeft -= sizeToCopy
+		addr += sizeToCopy
+		offset += sizeToCopy
+
+		m.driver.logTaskToGPUInitiate(cmd, req)
+	}
+
+	m.cyclesLeft = m.cyclesPerH2D
+
+	queue.IsRunning = true
 
 	return true
 }

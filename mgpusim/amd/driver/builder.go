@@ -116,6 +116,9 @@ func (b Builder) Build(name string) *Driver {
 
 	b.createCPU(driver)
 
+	driver.memoryAllocateReqMap = 
+		make(map[string]*mem.AllocateReq) // Initialize map to track memory allocation requests.
+
 	return driver
 }
 

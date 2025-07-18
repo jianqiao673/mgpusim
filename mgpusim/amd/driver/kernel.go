@@ -187,29 +187,70 @@ func (d *Driver) enqueueLaunchUnifiedKernel(
 	d.enqueueLaunchUnifiedKernelCommand(queue, co, packetArray, dPacketArray)
 }
 
-// // EnqueueLaunchKernel schedules kernel to be launched later
-// func (d *Driver) LazyEnqueueLaunchKernel(
-// 	queue *CommandQueue,
-// 	co *insts.HsaCo,
-// 	gridSize [3]uint32,
-// 	wgSize [3]uint16,
-// 	kernelArgs interface{},
-// ) (dCoData, dKernArgData, dPacket Ptr) {
-// 	dev := d.devices[queue.GPUID]
+func (d *Driver) lazyPrepareLocalMemory(
+	co *insts.HsaCo,
+	kernelArgs interface{},
+) (newKernelArgs interface{}, ldsSize uint32) {
+	newKernelArgs = reflect.New(reflect.TypeOf(kernelArgs).Elem()).Interface()
+	reflect.ValueOf(newKernelArgs).Elem().
+		Set(reflect.ValueOf(kernelArgs).Elem())
 
-// 	dCoData, dKernArgData, dPacket = d.allocateGPUMemory(queue.Context, co)
+	ldsSize = co.WGGroupSegmentByteSize
 
-// 	packet := d.createAQLPacket(gridSize, wgSize, dCoData, dKernArgData)
-// 	newKernelArgs := d.prepareLocalMemory(co, kernelArgs, packet)
+	if reflect.TypeOf(newKernelArgs).Kind() == reflect.Slice {
+		// From server, do nothing
+	} else {
+		kernArgStruct := reflect.ValueOf(newKernelArgs).Elem()
+		for i := 0; i < kernArgStruct.NumField(); i++ {
+			arg := kernArgStruct.Field(i).Interface()
 
-// 	d.EnqueueMemCopyH2D(queue, dCoData, co.Data)
-// 	d.EnqueueMemCopyH2D(queue, dKernArgData, newKernelArgs)
-// 	d.EnqueueMemCopyH2D(queue, dPacket, packet)
+			switch ldsPtr := arg.(type) {
+			case LocalPtr:
+				kernArgStruct.Field(i).SetUint(uint64(ldsSize))
+				ldsSize += uint32(ldsPtr)
+			}
+		}
+	}
 
-// 	d.enqueueLaunchKernelCommand(queue, co, packet, dPacket)
+	return newKernelArgs, ldsSize
+}
 
-// 	return dCoData, dKernArgData, dPacket
-// }
+// LazyEnqueueLaunchKernel schedules kernel to be launched later
+func (d *Driver) LazyEnqueueLaunchKernel(
+	queue *CommandQueue,
+	co *insts.HsaCo,
+	gridSize [3]uint32,
+	wgSize [3]uint16,
+	kernelArgs interface{},
+) (dCoData, dKernArgData, dPacket Ptr) {
+	dev := d.devices[queue.GPUID]
 
+	if dev.Type == internal.DeviceTypeUnifiedGPU {
+		panic("unified kernel not supported yet")
+	} else {
+		// 1. Allocate and copy dCoData
+		d.LazyEnqueueMemCopyH2D(queue, co.Data, uint64(len(co.Data)))
+		d.DrainCommandQueue(queue)
+		dCoData = d.AllocatedVAddr
+		
+		// 2. Allocate and copy dKernArgData
+		newKernelArgs, ldsSize := d.lazyPrepareLocalMemory(co, kernelArgs)
+		d.LazyEnqueueMemCopyH2D(queue, newKernelArgs, co.KernargSegmentByteSize)
+		d.DrainCommandQueue(queue)
+		dKernArgData = d.AllocatedVAddr
 
-// d.LazyEnqueueMemCopyH2D(queue, dst, src, byteSize)
+		// 3. Allocate and copy dPacket
+		packet := d.createAQLPacket(gridSize, wgSize, dCoData, dKernArgData)
+		packet.GroupSegmentSize = ldsSize
+		d.LazyEnqueueMemCopyH2D(queue, packet, uint64(binary.Size(packet)))
+		d.DrainCommandQueue(queue)
+		dPacket = d.AllocatedVAddr
+
+		log.Printf("dCoData: 0x%x, dKernArgData: 0x%x, dPacket: 0x%x\n",
+			dKernArgData, dPacket)
+
+		d.enqueueLaunchKernelCommand(queue, co, packet, dPacket)
+
+		return dCoData, dKernArgData, dPacket
+	}
+}

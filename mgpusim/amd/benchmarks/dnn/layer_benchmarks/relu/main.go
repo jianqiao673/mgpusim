@@ -97,7 +97,7 @@ func (b *Benchmark) initMem() {
 	}
 
 	// b.driver.MemCopyH2D(b.context, b.gInputData, b.inputData)
-	b.driver.LazyMemCopyH2D(b.context, b.gInputData, b.inputData, uint64(b.Length*4))
+	b.driver.LazyMemCopyH2D(b.context, b.inputData, uint64(b.Length*4))
 	b.gInputData = b.driver.AllocatedVAddr
 	b.gOutputData = b.gInputData
 }
@@ -122,7 +122,15 @@ func (b *Benchmark) exec() {
 			int64(numWI * i), 0, 0,
 		}
 
-		dCoData, dKernArgData, dPacket := b.driver.EnqueueLaunchKernel(
+		// dCoData, dKernArgData, dPacket := b.driver.EnqueueLaunchKernel(
+		// 	q,
+		// 	b.hsaco,
+		// 	[3]uint32{uint32(numWI), 1, 1},
+		// 	[3]uint16{64, 1, 1},
+		// 	&kernArg,
+		// )
+
+		dCoData, dKernArgData, dPacket := b.driver.LazyEnqueueLaunchKernel(
 			q,
 			b.hsaco,
 			[3]uint32{uint32(numWI), 1, 1},

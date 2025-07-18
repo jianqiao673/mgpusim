@@ -355,13 +355,11 @@ func (d *Driver) EnmapMemAlloc(
 // and enmaps the memory allocation request for the command.
 func (d *Driver) LazyEnqueueMemCopyH2D(
 	queue *CommandQueue,
-	dst Ptr,
 	src interface{},
 	byteSize uint64,
 ) {
 	cmd := &MemCopyH2DCommand{
 		ID:  sim.GetIDGenerator().Generate(),
-		Dst: dst,
 		Src: src,
 		IsLazy: true,
 	}
@@ -373,9 +371,9 @@ func (d *Driver) LazyEnqueueMemCopyH2D(
 
 // LazyMemCopyH2D copies a memory from the host to a GPU device,
 // and enmaps the memory allocation request for the command.
-func (d *Driver) LazyMemCopyH2D(ctx *Context, dst Ptr, src interface{}, byteSize uint64) {
+func (d *Driver) LazyMemCopyH2D(ctx *Context, src interface{}, byteSize uint64) {
 	queue := d.CreateCommandQueue(ctx)
-	d.LazyEnqueueMemCopyH2D(queue, dst, src, byteSize)
+	d.LazyEnqueueMemCopyH2D(queue, src, byteSize)
 	d.DrainCommandQueue(queue)
 }
 

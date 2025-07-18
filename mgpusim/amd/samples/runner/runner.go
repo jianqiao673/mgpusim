@@ -35,6 +35,8 @@ type Runner struct {
 	Parallel         bool
 	UseUnifiedMemory bool
 
+	SaveMemory bool
+
 	GPUIDs     []int
 	benchmarks []benchmarks.Benchmark
 }
@@ -122,6 +124,10 @@ func (r *Runner) AddBenchmark(b benchmarks.Benchmark) {
 	b.SelectGPU(r.GPUIDs)
 	if r.UseUnifiedMemory {
 		b.SetUnifiedMemory()
+	}
+
+	if r.SaveMemory {
+		b.SetMemorySaving()
 	}
 
 	r.benchmarks = append(r.benchmarks, b)

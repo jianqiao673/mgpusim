@@ -81,6 +81,8 @@ var memoryTracing = flag.Bool("trace-memory", false,
 	" -trace-memory is used to trace the memory accesses in the simulation "+
 	"and is used for the memory tracing in the simulation.")
 
+var memorySaving = flag.Bool("save-memory", false, "Save memory by lazy allocating and early freeing memory.")
+
 // parseFlag applies the runner flag to runner object
 func (r *Runner) parseFlag() *Runner {
 	r.parseSimulationFlags()
@@ -104,6 +106,10 @@ func (r *Runner) parseSimulationFlags() {
 
 	if *useUnifiedMemoryFlag {
 		r.UseUnifiedMemory = true
+	}
+
+	if *memorySaving {
+		r.SaveMemory = true
 	}
 }
 

@@ -3,6 +3,7 @@
 # 设置默认值
 DEFAULT_PROGRAM="relu"
 DEFAULT_ARGS="-timing -trace-vis -verify"
+# DEFAULT_ARGS="-timing -trace-vis -verify -save-memory"
 
 # 显示帮助信息
 usage() {

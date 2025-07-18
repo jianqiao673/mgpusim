@@ -37,6 +37,8 @@ type Benchmark struct {
 	gOutputData driver.Ptr
 
 	useUnifiedMemory bool
+
+	saveMemory bool
 }
 
 //go:embed kernels.hsaco
@@ -63,11 +65,21 @@ func (b *Benchmark) SetUnifiedMemory() {
 	b.useUnifiedMemory = true
 }
 
+// SetMemorySaving sets the memory saving mode
+func (b *Benchmark) SetMemorySaving() {
+	b.saveMemory = true
+}
+
 // Run runs
 func (b *Benchmark) Run() {
 	b.driver.SelectGPU(b.context, b.gpus[0])
-	b.initMem()
-	b.exec()
+	if b.saveMemory {
+		b.lazyInitMem()
+		b.saveExec()
+	} else {
+		b.initMem()
+		b.exec()
+	}
 }
 
 func (b *Benchmark) initMem() {
@@ -77,18 +89,16 @@ func (b *Benchmark) initMem() {
 		b.gOutputData = b.driver.AllocateUnifiedMemory(b.context,
 			uint64(b.Length*4))
 	} else {
-		// b.gInputData = b.driver.AllocateMemory(b.context, uint64(b.Length*4))
-		// b.driver.Distribute(b.context, b.gInputData, uint64(b.Length*4), b.gpus)
+		b.gInputData = b.driver.AllocateMemory(b.context, uint64(b.Length*4))
+		b.driver.Distribute(b.context, b.gInputData, uint64(b.Length*4), b.gpus)
 
-		// b.gOutputData = b.driver.AllocateMemory(b.context, uint64(b.Length*4))
-		// b.driver.Distribute(b.context, b.gOutputData,
-		// 	uint64(b.Length*4), b.gpus)
-		
-		// b.gOutputData = b.gInputData
+		b.gOutputData = b.driver.AllocateMemory(b.context, uint64(b.Length*4))
+		b.driver.Distribute(b.context, b.gOutputData,
+			uint64(b.Length*4), b.gpus)
 	}
 
-	// log.Printf("gInputData: 0x%x, gOutputData: 0x%x\n",
-		// b.gInputData, b.gOutputData)
+	log.Printf("gInputData: 0x%x, gOutputData: 0x%x\n",
+		b.gInputData, b.gOutputData)
 
 	b.inputData = make([]float32, b.Length)
 	b.outputData = make([]float32, b.Length)
@@ -96,10 +106,7 @@ func (b *Benchmark) initMem() {
 		b.inputData[i] = float32(i) - 0.5
 	}
 
-	// b.driver.MemCopyH2D(b.context, b.gInputData, b.inputData)
-	b.driver.LazyMemCopyH2D(b.context, b.inputData, uint64(b.Length*4))
-	b.gInputData = b.driver.AllocatedVAddr
-	b.gOutputData = b.gInputData
+	b.driver.MemCopyH2D(b.context, b.gInputData, b.inputData)
 }
 
 func (b *Benchmark) exec() {
@@ -122,13 +129,102 @@ func (b *Benchmark) exec() {
 			int64(numWI * i), 0, 0,
 		}
 
-		// dCoData, dKernArgData, dPacket := b.driver.EnqueueLaunchKernel(
-		// 	q,
-		// 	b.hsaco,
-		// 	[3]uint32{uint32(numWI), 1, 1},
-		// 	[3]uint16{64, 1, 1},
-		// 	&kernArg,
-		// )
+		dCoData, dKernArgData, dPacket := b.driver.EnqueueLaunchKernel(
+			q,
+			b.hsaco,
+			[3]uint32{uint32(numWI), 1, 1},
+			[3]uint16{64, 1, 1},
+			&kernArg,
+		)
+
+		allCoData = append(allCoData, dCoData)
+        allKernArgData = append(allKernArgData, dKernArgData)
+        allPackets = append(allPackets, dPacket)
+	}
+
+	for _, q := range queues {
+		b.driver.DrainCommandQueue(q)
+	}
+
+	b.driver.MemCopyD2H(b.context, b.outputData, b.gOutputData)
+
+
+	b.driver.FreeMemory(b.context, b.gInputData)
+	b.driver.FreeMemory(b.context, b.gOutputData)
+
+	for _, ptr := range allCoData {
+        if ptr != 0 { 
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+    for _, ptr := range allKernArgData {
+        if ptr != 0 {
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+
+	for _, ptr := range allPackets {
+        if ptr != 0 {
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+}
+
+// Verify verifies
+func (b *Benchmark) Verify() {
+	for i := 0; i < b.Length; i++ {
+		if b.inputData[i] > 0 && b.outputData[i] != b.inputData[i] {
+			log.Panicf("mismatch at %d, input %f, output %f", i,
+				b.inputData[i], b.outputData[i])
+		}
+
+		if b.inputData[i] <= 0 && b.outputData[i] != 0 {
+			log.Panicf("mismatch at %d, input %f, output %f", i,
+				b.inputData[i], b.outputData[i])
+		}
+	}
+
+	log.Printf("Passed!\n")
+}
+
+func (b *Benchmark) lazyInitMem() {
+	if b.useUnifiedMemory {
+		panic("lazy init does not support unified memory")
+	} 
+	
+	b.inputData = make([]float32, b.Length)
+	b.outputData = make([]float32, b.Length)
+	for i := 0; i < b.Length; i++ {
+		b.inputData[i] = float32(i) - 0.5
+	}
+	
+	b.driver.LazyMemCopyH2D(b.context, b.inputData, uint64(b.Length*4))
+	b.gInputData = b.driver.AllocatedVAddr
+	b.gOutputData = b.gInputData
+
+	log.Printf("gInputData: 0x%x, gOutputData: 0x%x\n",
+		b.gInputData, b.gOutputData)
+}
+
+func (b *Benchmark) saveExec() {
+	queues := make([]*driver.CommandQueue, len(b.gpus))
+
+	var allCoData []driver.Ptr
+    var allKernArgData []driver.Ptr
+    var allPackets []driver.Ptr
+
+	for i, gpu := range b.gpus {
+		b.driver.SelectGPU(b.context, gpu)
+		q := b.driver.CreateCommandQueue(b.context)
+		queues[i] = q
+
+		numWI := b.Length / len(b.gpus)
+
+		kernArg := KernelArgs{
+			uint32(b.Length), 0,
+			b.gInputData, b.gOutputData,
+			int64(numWI * i), 0, 0,
+		}
 
 		dCoData, dKernArgData, dPacket := b.driver.LazyEnqueueLaunchKernel(
 			q,
@@ -166,23 +262,5 @@ func (b *Benchmark) exec() {
 
 	b.driver.MemCopyD2H(b.context, b.outputData, b.gOutputData)
 
-
 	b.driver.FreeMemory(b.context, b.gInputData)
-}
-
-// Verify verifies
-func (b *Benchmark) Verify() {
-	for i := 0; i < b.Length; i++ {
-		if b.inputData[i] > 0 && b.outputData[i] != b.inputData[i] {
-			log.Panicf("mismatch at %d, input %f, output %f", i,
-				b.inputData[i], b.outputData[i])
-		}
-
-		if b.inputData[i] <= 0 && b.outputData[i] != 0 {
-			log.Panicf("mismatch at %d, input %f, output %f", i,
-				b.inputData[i], b.outputData[i])
-		}
-	}
-
-	log.Printf("Passed!\n")
 }

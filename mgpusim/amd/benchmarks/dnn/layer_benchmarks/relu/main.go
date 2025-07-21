@@ -148,7 +148,6 @@ func (b *Benchmark) exec() {
 
 	b.driver.MemCopyD2H(b.context, b.outputData, b.gOutputData)
 
-
 	b.driver.FreeMemory(b.context, b.gInputData)
 	b.driver.FreeMemory(b.context, b.gOutputData)
 
@@ -253,7 +252,6 @@ func (b *Benchmark) saveExec() {
             b.driver.FreeMemory(b.context, ptr)
         }
     }
-
 	for _, ptr := range allPackets {
         if ptr != 0 {
             b.driver.FreeMemory(b.context, ptr)

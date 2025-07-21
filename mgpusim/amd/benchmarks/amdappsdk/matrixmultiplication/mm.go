@@ -67,7 +67,9 @@ func (m *GPUMatrixMultiplier) Multiply(mA, mB *Matrix) *Matrix {
 	m.loadKernel()
 	gA, gB, gC := m.initMemory(mA, mB, mC)
 	m.launchKernel(gA, gB, gC, mA, mC)
-	m.copyDataBackFromGPU(mC, gC)
+
+	log.Printf("gA: 0x%x, gB: 0x%x, gC: 0x%x\n",
+	gA, gB, gC)
 
 	return mC
 }
@@ -78,6 +80,10 @@ func (m *GPUMatrixMultiplier) launchKernel(
 	mC *Matrix,
 ) {
 	queues := make([]*driver.CommandQueue, len(m.gpus))
+
+	var allCoData []driver.Ptr
+    var allKernArgData []driver.Ptr
+    var allPackets []driver.Ptr
 
 	for i, gpu := range m.gpus {
 		m.driver.SelectGPU(m.context, gpu)
@@ -94,18 +100,47 @@ func (m *GPUMatrixMultiplier) launchKernel(
 			32 * 32 * 4,
 			0, int64(height * i), 0,
 		}
-		m.driver.EnqueueLaunchKernel(
+	
+		dCoData, dKernArgData, dPacket := m.driver.EnqueueLaunchKernel(
 			q,
 			m.kernel,
 			[3]uint32{uint32(width), uint32(height), 1},
 			[3]uint16{8, 8, 1},
 			kernArgs,
 		)
+
+		allCoData = append(allCoData, dCoData)
+        allKernArgData = append(allKernArgData, dKernArgData)
+        allPackets = append(allPackets, dPacket)
 	}
 
 	for _, q := range queues {
 		m.driver.DrainCommandQueue(q)
 	}
+
+	m.driver.MemCopyD2H(m.context, mC.Data, gC)
+
+	// Free memory
+	m.driver.FreeMemory(m.context, gA)
+	m.driver.FreeMemory(m.context, gB)
+	m.driver.FreeMemory(m.context, gC)
+
+	for _, ptr := range allCoData {
+        if ptr != 0 { 
+            m.driver.FreeMemory(m.context, ptr)
+        }
+    }
+    for _, ptr := range allKernArgData {
+        if ptr != 0 {
+            m.driver.FreeMemory(m.context, ptr)
+        }
+    }
+
+	for _, ptr := range allPackets {
+        if ptr != 0 {
+            m.driver.FreeMemory(m.context, ptr)
+        }
+    }
 }
 
 func (m *GPUMatrixMultiplier) initMemory(
@@ -132,13 +167,6 @@ func (m *GPUMatrixMultiplier) initMemory(
 	m.driver.MemCopyH2D(m.context, gB, mB.Data)
 
 	return gA, gB, gC
-}
-
-func (m *GPUMatrixMultiplier) copyDataBackFromGPU(
-	matrix *Matrix,
-	gm driver.Ptr,
-) {
-	m.driver.MemCopyD2H(m.context, matrix.Data, gm)
 }
 
 //go:embed kernels.hsaco
@@ -179,6 +207,111 @@ func (m *CPUMatrixMultiplier) Multiply(mA, mB *Matrix) *Matrix {
 			mC.Data[indexC] = sum
 		}
 	}
+
+	return mC
+}
+
+func (m *GPUMatrixMultiplier) lazyInitMemory(
+	mA, mB, mC *Matrix,
+) (driver.Ptr, driver.Ptr, driver.Ptr) {
+	if m.useUnifiedMemory {
+		panic("lazy init does not support unified memory")
+	}
+
+	m.driver.LazyMemCopyH2D(m.context, mA.Data, uint64(mA.Width*mA.Height*4))
+	gA := m.driver.AllocatedVAddr
+	m.driver.LazyMemCopyH2D(m.context, mB.Data, uint64(mB.Width*mB.Height*4))
+	gB := m.driver.AllocatedVAddr
+	gC := gA // Plan A
+	// gC := gB // Plan B 
+
+	return gA, gB, gC
+}
+
+func (m *GPUMatrixMultiplier) saveLaunchKernel(
+	gA, gB, gC driver.Ptr,
+	mA *Matrix,
+	mC *Matrix,
+) {
+	queues := make([]*driver.CommandQueue, len(m.gpus))
+
+	var allCoData []driver.Ptr
+    var allKernArgData []driver.Ptr
+    var allPackets []driver.Ptr
+
+	for i, gpu := range m.gpus {
+		m.driver.SelectGPU(m.context, gpu)
+		q := m.driver.CreateCommandQueue(m.context)
+
+		queues[i] = q
+
+		width := int(mC.Width) / 4
+		height := int(mC.Height) / 4 / len(m.gpus)
+
+		kernArgs := &KernelArgs{
+			gA, gB, gC,
+			mA.Width,
+			32 * 32 * 4,
+			0, int64(height * i), 0,
+		}
+
+		dCoData, dKernArgData, dPacket := m.driver.LazyEnqueueLaunchKernel(
+			q,
+			m.kernel,
+			[3]uint32{uint32(width), uint32(height), 1},
+			[3]uint16{8, 8, 1},
+			kernArgs,
+		)
+
+		allCoData = append(allCoData, dCoData)
+        allKernArgData = append(allKernArgData, dKernArgData)
+        allPackets = append(allPackets, dPacket)
+	}
+
+	for _, q := range queues {
+		m.driver.DrainCommandQueue(q)
+	}
+	
+	// Free memory
+	m.driver.FreeMemory(m.context, gB) // Plan A
+	// m.driver.FreeMemory(m.context, gA) // Plan B
+	
+	for _, ptr := range allCoData {
+		if ptr != 0 { 
+			m.driver.FreeMemory(m.context, ptr)
+        }
+    }
+    for _, ptr := range allKernArgData {
+		if ptr != 0 {
+			m.driver.FreeMemory(m.context, ptr)
+        }
+    }
+	for _, ptr := range allPackets {
+		if ptr != 0 {
+			m.driver.FreeMemory(m.context, ptr)
+        }
+    }
+	
+	m.driver.MemCopyD2H(m.context, mC.Data, gC)
+	
+	m.driver.FreeMemory(m.context, gA) // Plan A
+	// m.driver.FreeMemory(m.context, gB) // Plan B
+}
+
+
+// SaveMultiply multiplies two matrice and save memory as much as possible
+func (m *GPUMatrixMultiplier) SaveMultiply(mA, mB *Matrix) *Matrix {
+	mC := new(Matrix)
+	mC.Width = mB.Width
+	mC.Height = mA.Height
+	mC.Data = make([]float32, mC.Width*mC.Height)
+
+	m.loadKernel()
+	gA, gB, gC := m.lazyInitMemory(mA, mB, mC)
+	m.saveLaunchKernel(gA, gB, gC, mA, mC)
+
+	log.Printf("gA: 0x%x, gB: 0x%x, gC: 0x%x\n",
+	gA, gB, gC)
 
 	return mC
 }

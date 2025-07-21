@@ -19,6 +19,8 @@ type Benchmark struct {
 	X, Y, Z                   uint32
 	MatrixA, MatrixB, MatrixC *Matrix
 	useUnifiedMemory          bool
+
+	saveMemory bool
 }
 
 // NewBenchmark makes a new benchmark
@@ -46,6 +48,11 @@ func (b *Benchmark) SetUnifiedMemory() {
 	b.useUnifiedMemory = true
 }
 
+// SetMemorySaving sets the memory saving mode
+func (b *Benchmark) SetMemorySaving() {
+	b.saveMemory = true
+}
+
 func (b *Benchmark) initMem() {
 	rand.Seed(0)
 
@@ -70,7 +77,11 @@ func (b *Benchmark) exec() {
 	m := NewGPUMatrixMultiplier(b.driver, b.context)
 	m.SelectGPU(b.gpus)
 	m.useUnifiedMemory = b.useUnifiedMemory
-	b.MatrixC = m.Multiply(b.MatrixA, b.MatrixB)
+	if b.saveMemory {
+		b.MatrixC = m.SaveMultiply(b.MatrixA, b.MatrixB)
+	} else {
+		b.MatrixC = m.Multiply(b.MatrixA, b.MatrixB)
+	}
 }
 
 // Verify verifies

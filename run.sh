@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # 设置默认值
-DEFAULT_PROGRAM="relu"
+# DEFAULT_PROGRAM="relu"
+DEFAULT_PROGRAM="matrixmultiplication"
 # DEFAULT_ARGS="-timing -trace-vis -verify"
 DEFAULT_ARGS="-timing -trace-vis -verify -save-memory"
 

@@ -863,11 +863,11 @@ func (d *Driver) LazyAllocateMemory(trg *protocol.MemoryAllocateTrigger) bool {
 	// d.Distribute(ctx, dst, allocateReq.ByteSize, allocateReq.GPUIDs) // TODO: without using Distribute
 	
 	rsp := protocol.NewMemoryAllocateRsp(
-		d.gpuPort.AsRemote(), trg.Src, trg.MemCopyH2DCmdID, uint64(vAddr), pAddr) // TODO: d.gpuPort.AsRemote() or trg.Dst
+		d.gpuPort.AsRemote(), trg.Src, trg.MemCopyH2DCmdID, uint64(vAddr), pAddr)
 		
 	err := d.gpuPort.Send(rsp)
 	if err == nil {
-		tracing.TraceReqInitiate(rsp, d, rsp.ID) // TODO: CP cannot receive this
+		tracing.TraceReqInitiate(rsp, d, rsp.ID)
 	}
 
 	return true

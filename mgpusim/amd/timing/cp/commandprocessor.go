@@ -844,6 +844,8 @@ func (p *CommandProcessor) sendMemoryAllocateTrigger(req *protocol.MemCopyH2DReq
 		panic(err)
 	}
 
+	tracing.TraceReqInitiate(trg, p, trg.ID)
+
 	p.isSendMemoryAllocateTriggerMap[req.CmdID] = true
 
 	return true

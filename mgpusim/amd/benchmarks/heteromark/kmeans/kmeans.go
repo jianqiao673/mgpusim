@@ -68,6 +68,8 @@ type Benchmark struct {
 	gpuRMSE float64
 
 	useUnifiedMemory bool
+
+	saveMemory bool
 }
 
 // NewBenchmark makes a new benchmark
@@ -107,11 +109,21 @@ func (b *Benchmark) SetUnifiedMemory() {
 	b.useUnifiedMemory = true
 }
 
+// SetMemorySaving sets the memory saving mode
+func (b *Benchmark) SetMemorySaving() {
+	b.saveMemory = true
+}
+
 // Run runs
 func (b *Benchmark) Run() {
 	b.driver.SelectGPU(b.context, b.gpus[0])
-	b.initMem()
-	b.exec()
+	if b.saveMemory {
+		b.lazyInitMem()
+		b.saveExec()
+	} else {
+		b.initMem()
+		b.exec()
+	}
 }
 
 func (b *Benchmark) initMem() {
@@ -141,6 +153,9 @@ func (b *Benchmark) initMem() {
 			uint64(b.NumPoints*4), b.gpus)
 	}
 
+	log.Printf("dFeatures: 0x%x, dFeaturesSwap: 0x%x, dMembership: 0x%x\n",
+		b.dFeatures, b.dFeaturesSwap, b.dMembership)
+
 	b.dClusters = make([]driver.Ptr, len(b.gpus))
 	for i, gpu := range b.gpus {
 		b.driver.SelectGPU(b.context, gpu)
@@ -150,6 +165,7 @@ func (b *Benchmark) initMem() {
 		} else {
 			b.dClusters[i] = b.driver.AllocateMemory(
 				b.context, uint64(b.NumClusters*b.NumFeatures*4))
+			log.Printf("dClusters[%d]: 0x%x\n", i, b.dClusters[i])
 		}
 	}
 
@@ -167,9 +183,14 @@ func (b *Benchmark) exec() {
 	b.transposeFeatures()
 	b.kmeansClustering()
 	b.gpuRMSE = b.calculateRMSE()
+	b.freeData()
 }
 
 func (b *Benchmark) transposeFeatures() {
+	var allCoData []driver.Ptr
+    var allKernArgData []driver.Ptr
+    var allPackets []driver.Ptr
+
 	for i, q := range b.queues {
 		numWI := b.NumPoints / len(b.gpus)
 
@@ -181,13 +202,17 @@ func (b *Benchmark) transposeFeatures() {
 			int64(numWI * i), 0, 0,
 		}
 
-		b.driver.EnqueueLaunchKernel(
+		dCoData, dKernArgData, dPacket := b.driver.EnqueueLaunchKernel(
 			q,
 			b.swapKernel,
 			[3]uint32{uint32(numWI), 1, 1},
 			[3]uint16{64, 1, 1},
 			&kernArg,
 		)
+
+		allCoData = append(allCoData, dCoData)
+        allKernArgData = append(allKernArgData, dKernArgData)
+        allPackets = append(allPackets, dPacket)
 	}
 
 	for _, q := range b.queues {
@@ -195,6 +220,23 @@ func (b *Benchmark) transposeFeatures() {
 	}
 
 	b.verifySwap()
+
+	for _, ptr := range allCoData {
+        if ptr != 0 { 
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+    for _, ptr := range allKernArgData {
+        if ptr != 0 {
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+
+	for _, ptr := range allPackets {
+        if ptr != 0 {
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
 }
 
 func (b *Benchmark) verifySwap() {
@@ -245,6 +287,10 @@ func (b *Benchmark) initializeMembership() {
 }
 
 func (b *Benchmark) updateMembership() float64 {
+	var allCoData []driver.Ptr
+    var allKernArgData []driver.Ptr
+    var allPackets []driver.Ptr
+
 	for i, q := range b.queues {
 		b.driver.EnqueueMemCopyH2D(q, b.dClusters[i], b.hClusters)
 
@@ -261,13 +307,17 @@ func (b *Benchmark) updateMembership() float64 {
 			int64(numWI * i), 0, 0,
 		}
 
-		b.driver.EnqueueLaunchKernel(
+		dCoData, dKernArgData, dPacket := b.driver.EnqueueLaunchKernel(
 			q,
 			b.computeKernel,
 			[3]uint32{uint32(numWI), 1, 1},
 			[3]uint16{64, 1, 1},
 			&kernArg,
 		)
+
+		allCoData = append(allCoData, dCoData)
+        allKernArgData = append(allKernArgData, dKernArgData)
+        allPackets = append(allPackets, dPacket)
 	}
 
 	for _, q := range b.queues {
@@ -285,6 +335,22 @@ func (b *Benchmark) updateMembership() float64 {
 			b.hMembership[i] = newMembership[i]
 		}
 	}
+
+	for _, ptr := range allCoData {
+        if ptr != 0 { 
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+    for _, ptr := range allKernArgData {
+        if ptr != 0 {
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+	for _, ptr := range allPackets {
+        if ptr != 0 {
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
 
 	return delta
 }
@@ -411,4 +477,202 @@ func (b *Benchmark) compareCentroids(cpuCentroids, gpuCentroids []float32) {
 			}
 		}
 	}
+}
+
+func (b *Benchmark) freeData() {
+	b.driver.FreeMemory(b.context, b.dFeatures)
+	b.driver.FreeMemory(b.context, b.dFeaturesSwap)
+	b.driver.FreeMemory(b.context, b.dMembership)
+	for _, ptr := range b.dClusters {
+		if ptr != 0 {
+			b.driver.FreeMemory(b.context, ptr)
+		}
+	}
+}
+
+func (b *Benchmark) lazyInitMem() {
+	if b.useUnifiedMemory {
+		panic("lazy init does not support unified memory")
+	} 
+		
+	rand.Seed(0)
+	b.hFeatures = make([]float32, b.NumPoints*b.NumFeatures)
+	for i := 0; i < b.NumPoints*b.NumFeatures; i++ {
+		b.hFeatures[i] = rand.Float32()
+		// b.hFeatures[i] = float32(i)
+	}
+	
+	b.driver.LazyMemCopyH2D(b.context, b.hFeatures, uint64(b.NumPoints*b.NumFeatures*4))
+	b.dFeatures = b.driver.AllocatedVAddr
+
+	b.dFeaturesSwap = b.driver.AllocateMemory(
+		b.context, uint64(b.NumPoints*b.NumFeatures*4))
+	b.driver.Distribute(b.context, b.dFeaturesSwap,
+		uint64(b.NumPoints*b.NumFeatures*4), b.gpus)
+
+	b.dMembership = b.driver.AllocateMemory(
+		b.context, uint64(b.NumPoints*4))
+	b.driver.Distribute(b.context, b.dMembership,
+		uint64(b.NumPoints*4), b.gpus)
+
+	log.Printf("dFeatures: 0x%x, dFeaturesSwap: 0x%x, dMembership: 0x%x\n",
+		b.dFeatures, b.dFeaturesSwap, b.dMembership)
+}
+
+func (b *Benchmark) saveUpdateMembership() float64 {
+	var allCoData []driver.Ptr
+    var allKernArgData []driver.Ptr
+    var allPackets []driver.Ptr
+
+	b.dClusters = make([]driver.Ptr, len(b.gpus))
+	for i, q := range b.queues {
+		b.driver.LazyEnqueueMemCopyH2D(q, b.hClusters, uint64(b.NumClusters*b.NumFeatures*4))
+		b.driver.DrainCommandQueue(q)
+		b.dClusters[i] = b.driver.AllocatedVAddr
+		log.Printf("dClusters[%d]: 0x%x\n", i, b.dClusters[i])
+
+		numWI := b.NumPoints / len(b.gpus)
+
+		kernArg := ComputeArgs{
+			b.dFeaturesSwap,
+			b.dClusters[i],
+			b.dMembership,
+			int32(b.NumPoints),
+			int32(b.NumClusters),
+			int32(b.NumFeatures),
+			0, 0, 0,
+			int64(numWI * i), 0, 0,
+		}
+
+		dCoData, dKernArgData, dPacket := b.driver.LazyEnqueueLaunchKernel(
+			q,
+			b.computeKernel,
+			[3]uint32{uint32(numWI), 1, 1},
+			[3]uint16{64, 1, 1},
+			&kernArg,
+		)
+
+		allCoData = append(allCoData, dCoData)
+        allKernArgData = append(allKernArgData, dKernArgData)
+        allPackets = append(allPackets, dPacket)
+	}
+
+	for _, q := range b.queues {
+		b.driver.DrainCommandQueue(q)
+	}
+
+	for _, ptr := range allCoData {
+		if ptr != 0 { 
+			b.driver.FreeMemory(b.context, ptr)
+		}
+	}
+	for _, ptr := range allKernArgData {
+		if ptr != 0 {
+			b.driver.FreeMemory(b.context, ptr)
+		}
+	}
+	for _, ptr := range allPackets {
+		if ptr != 0 {
+			b.driver.FreeMemory(b.context, ptr)
+		}
+	}
+
+	for _, ptr := range b.dClusters {
+		if ptr != 0 {
+			b.driver.FreeMemory(b.context, ptr)
+		}
+	}
+
+	newMembership := make([]int32, b.NumPoints)
+	b.driver.MemCopyD2H(b.context, newMembership, b.dMembership)
+
+	delta := 0.0
+	for i := 0; i < b.NumPoints; i++ {
+		//fmt.Printf("%d - %d\n", i, newMembership[i])
+		if newMembership[i] != b.hMembership[i] {
+			delta++
+			b.hMembership[i] = newMembership[i]
+		}
+	}
+
+
+	return delta
+}
+
+func (b *Benchmark) saveTransposeFeatures() {
+	var allCoData []driver.Ptr
+    var allKernArgData []driver.Ptr
+    var allPackets []driver.Ptr
+
+	for i, q := range b.queues {
+		numWI := b.NumPoints / len(b.gpus)
+
+		kernArg := SwapArgs{
+			b.dFeatures,
+			b.dFeaturesSwap,
+			int32(b.NumPoints),
+			int32(b.NumFeatures),
+			int64(numWI * i), 0, 0,
+		}
+
+		dCoData, dKernArgData, dPacket := b.driver.LazyEnqueueLaunchKernel(
+			q,
+			b.swapKernel,
+			[3]uint32{uint32(numWI), 1, 1},
+			[3]uint16{64, 1, 1},
+			&kernArg,
+		)
+
+		allCoData = append(allCoData, dCoData)
+        allKernArgData = append(allKernArgData, dKernArgData)
+        allPackets = append(allPackets, dPacket)
+	}
+
+	for _, q := range b.queues {
+		b.driver.DrainCommandQueue(q)
+	}
+
+	b.verifySwap()
+
+	for _, ptr := range allCoData {
+        if ptr != 0 { 
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+    for _, ptr := range allKernArgData {
+        if ptr != 0 {
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+
+	for _, ptr := range allPackets {
+        if ptr != 0 {
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+
+	b.driver.FreeMemory(b.context, b.dFeatures)
+}
+
+func (b *Benchmark) saveKmeansClustering() {
+	numIterations := 0
+	delta := float64(1.0)
+
+	b.initializeClusters()
+	b.initializeMembership()
+
+	for delta > 0 && numIterations < b.MaxIter {
+		delta = b.saveUpdateMembership()
+		numIterations++
+		b.updateCentroids()
+	}
+
+	fmt.Fprintf(os.Stderr, "GPU iterated %d times\n", numIterations)
+}
+
+func (b *Benchmark) saveExec() {
+	b.saveTransposeFeatures()
+	b.saveKmeansClustering()
+	b.gpuRMSE = b.calculateRMSE()
+	b.freeData()
 }

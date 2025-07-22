@@ -21,7 +21,8 @@ const (
 )
 
 // MemoryAllocatorType global flag variable for setting the allocator type
-var MemoryAllocatorType = AllocatorTypeDefault
+// var MemoryAllocatorType = AllocatorTypeDefault
+var MemoryAllocatorType = AllocatorTypeBuddy
 
 // DeviceProperties defines the properties of a device
 type DeviceProperties struct {

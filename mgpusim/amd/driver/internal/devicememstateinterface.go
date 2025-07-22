@@ -1,5 +1,7 @@
 package internal
 
+import "log"
+
 // A DeviceMemoryState handles the internal memory allocation algorithms
 type DeviceMemoryState interface {
 	setInitialAddress(addr uint64)
@@ -14,6 +16,7 @@ type DeviceMemoryState interface {
 
 // NewDeviceMemoryState creates a new device memory state based on allocator type.
 func NewDeviceMemoryState(log2pagesize uint64) DeviceMemoryState {
+	log.Printf("MemoryAllocatorType: %d (0=AllocatorTypeDefault, 1=AllocatorTypeBuddy)\n", MemoryAllocatorType)
 	switch MemoryAllocatorType {
 	case AllocatorTypeDefault:
 		return newDeviceRegularMemoryState(log2pagesize)

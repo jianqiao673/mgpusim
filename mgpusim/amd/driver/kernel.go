@@ -247,7 +247,7 @@ func (d *Driver) LazyEnqueueLaunchKernel(
 		dPacket = d.AllocatedVAddr
 
 		log.Printf("dCoData: 0x%x, dKernArgData: 0x%x, dPacket: 0x%x\n",
-			dKernArgData, dPacket)
+			dCoData, dKernArgData, dPacket)
 
 		d.enqueueLaunchKernelCommand(queue, co, packet, dPacket)
 

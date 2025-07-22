@@ -161,7 +161,6 @@ func (b *Benchmark) exec() {
             b.driver.FreeMemory(b.context, ptr)
         }
     }
-
 	for _, ptr := range allPackets {
         if ptr != 0 {
             b.driver.FreeMemory(b.context, ptr)

@@ -4,8 +4,8 @@
 # DEFAULT_PROGRAM="relu"
 # DEFAULT_PROGRAM="matrixmultiplication"
 DEFAULT_PROGRAM="kmeans"
-DEFAULT_ARGS="-timing -trace-vis -verify"
-# DEFAULT_ARGS="-timing -trace-vis -verify -save-memory"
+# DEFAULT_ARGS="-timing -trace-vis -verify"
+DEFAULT_ARGS="-timing -trace-vis -verify -save-memory"
 
 # 显示帮助信息
 usage() {

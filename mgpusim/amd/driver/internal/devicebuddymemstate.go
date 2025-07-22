@@ -216,3 +216,7 @@ func (bms *deviceBuddyMemoryState) blockOrBuddyIsAllocated(ptr uint64, level int
 	index := bms.indexOfBlock(ptr, level - 1)
 	return bms.bfMergeList.checkBit(index)
 }
+
+func (bms *deviceBuddyMemoryState)	sortAvailablePAddrsAsc() {
+	// TODO
+}

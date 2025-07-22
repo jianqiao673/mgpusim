@@ -212,6 +212,7 @@ func (a *memoryAllocatorImpl) removePage(vAddr uint64) uint64 {
 	deviceID := a.deviceIDByPAddr(page.PAddr)
 	dState := a.devices[deviceID].MemState
 	dState.addSinglePAddr(page.PAddr)
+	dState.sortAvailablePAddrsAsc() // Sort available addresses after freeing a page
 
 	a.pageTable.Remove(page.PID, page.VAddr)
 

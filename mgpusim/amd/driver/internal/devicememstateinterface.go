@@ -1,6 +1,9 @@
 package internal
 
-import "log"
+import (
+	"log"
+	"sort"
+)
 
 // A DeviceMemoryState handles the internal memory allocation algorithms
 type DeviceMemoryState interface {
@@ -12,6 +15,7 @@ type DeviceMemoryState interface {
 	popNextAvailablePAddrs() uint64
 	noAvailablePAddrs() bool
 	allocateMultiplePages(numPages int) []uint64
+	sortAvailablePAddrsAsc()
 }
 
 // NewDeviceMemoryState creates a new device memory state based on allocator type.
@@ -85,4 +89,10 @@ func (dms *deviceMemoryStateImpl) allocateMultiplePages(
 		pAddrs = append(pAddrs, pAddr)
 	}
 	return pAddrs
+}
+
+func (dms *deviceMemoryStateImpl) sortAvailablePAddrsAsc() {
+	sort.Slice(dms.availablePAddrs, func(i, j int) bool {
+		return dms.availablePAddrs[i] < dms.availablePAddrs[j]
+	})
 }

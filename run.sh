@@ -1,9 +1,7 @@
 #!/bin/bash
 
 # 设置默认值
-# DEFAULT_PROGRAM="relu"
-# DEFAULT_PROGRAM="matrixmultiplication"
-DEFAULT_PROGRAM="kmeans"
+DEFAULT_PROGRAM="simpleconvolution"
 # DEFAULT_ARGS="-timing -trace-vis -verify"
 DEFAULT_ARGS="-timing -trace-vis -verify -save-memory"
 
@@ -43,9 +41,19 @@ CMD="cd mgpusim/amd/samples/$PROGRAM && rm -f akita_sim_**.sqlite3 && go build &
 
 # 打印命令（会显示在终端，不会被重定向）
 echo "Executing: $CMD" >&2
+echo "Start time: $(date)" >&2
+
+# 记录开始时间
+START_TIME=$(date +%s.%N)
 
 # 执行命令并重定向输出
 eval "$CMD" &> "log/${PROGRAM}.txt"
+
+# 记录结束时间
+END_TIME=$(date +%s.%N)
+
+# 计算运行时间
+ELAPSED_TIME=$(echo "$END_TIME - $START_TIME" | bc)
 
 # 将运行结果移动到plot/data
 DST="../../../../plot/data/$PROGRAM/"
@@ -53,4 +61,13 @@ mkdir -p $DST
 mv akita_sim_**.sqlite3 $DST
 
 # 打印完成信息
-echo "Execution completed. Output saved to log/${PROGRAM}.txt" >&2
+# echo "Execution completed." >&2
+# echo "Output saved to log/${PROGRAM}.txt" >&2
+echo "End time: $(date)" >&2
+printf "Elapsed time: %.2f seconds\n" $ELAPSED_TIME >&2
+
+cd ../../../../
+# 将时间信息也写入日志文件
+echo "Start time: $(date -d @${START_TIME%.*})" >> "log/${PROGRAM}.txt"
+echo "End time: $(date -d @${END_TIME%.*})" >> "log/${PROGRAM}.txt"
+echo "Elapsed time: $ELAPSED_TIME seconds" >> "log/${PROGRAM}.txt"

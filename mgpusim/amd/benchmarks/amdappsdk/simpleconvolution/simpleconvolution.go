@@ -45,6 +45,8 @@ type Benchmark struct {
 	dMasks      []driver.Ptr
 
 	useUnifiedMemory bool
+
+	saveMemory bool
 }
 
 // NewBenchmark returns a benchmark
@@ -64,6 +66,11 @@ func (b *Benchmark) SelectGPU(gpus []int) {
 // SetUnifiedMemory uses Unified Memory
 func (b *Benchmark) SetUnifiedMemory() {
 	b.useUnifiedMemory = true
+}
+
+// SetMemorySaving sets the memory saving mode
+func (b *Benchmark) SetMemorySaving() {
+	b.saveMemory = true
 }
 
 //go:embed kernels.hsaco
@@ -86,8 +93,13 @@ func (b *Benchmark) SetMaskSize(maskSize uint32) {
 // Run runs
 func (b *Benchmark) Run() {
 	b.driver.SelectGPU(b.context, b.gpus[0])
-	b.initMem()
-	b.exec()
+	if b.saveMemory {
+		b.lazyInitMem()
+		b.saveExec()
+	} else {
+		b.initMem()
+		b.exec()
+	}
 }
 
 func (b *Benchmark) initMem() {
@@ -124,6 +136,9 @@ func (b *Benchmark) initMem() {
 			uint64(numOutputData*4), b.gpus)
 	}
 
+	log.Printf("dInputData: 0x%x, dOutputData: 0x%x\n",
+		b.dInputData, b.dOutputData)
+
 	b.dMasks = make([]driver.Ptr, len(b.gpus))
 	for i, gpu := range b.gpus {
 		b.driver.SelectGPU(b.context, gpu)
@@ -136,15 +151,24 @@ func (b *Benchmark) initMem() {
 				b.context,
 				uint64(b.maskSize*b.maskSize*4))
 		}
+
+		log.Printf("dMasks[%d]: 0x%x\n",
+			i, b.dMasks[i])
+
 		b.driver.MemCopyH2D(b.context, b.dMasks[i], b.hMask)
 	}
 
 	b.driver.MemCopyH2D(b.context, b.dInputData, b.hInputData)
-	b.driver.MemCopyH2D(b.context, b.dOutputData, b.hOutputData)
+	// b.driver.MemCopyH2D(b.context, b.dOutputData, b.hOutputData)
 }
 
 func (b *Benchmark) exec() {
 	queues := make([]*driver.CommandQueue, len(b.gpus))
+
+	var allCoData []driver.Ptr
+    var allKernArgData []driver.Ptr
+    var allPackets []driver.Ptr
+
 	for i, gpu := range b.gpus {
 		b.driver.SelectGPU(b.context, gpu)
 		queues[i] = b.driver.CreateCommandQueue(b.context)
@@ -163,13 +187,17 @@ func (b *Benchmark) exec() {
 			uint64(gridSize * uint32(i)), 0, 0,
 		}
 
-		b.driver.EnqueueLaunchKernel(
+		dCoData, dKernArgData, dPacket := b.driver.EnqueueLaunchKernel(
 			queues[i],
 			b.kernel,
 			[3]uint32{gridSize, 1, 1},
 			[3]uint16{uint16(64), 1, 1},
 			&kernArg,
 		)
+
+		allCoData = append(allCoData, dCoData)
+        allKernArgData = append(allKernArgData, dKernArgData)
+        allPackets = append(allPackets, dPacket)
 	}
 
 	for _, q := range queues {
@@ -177,6 +205,29 @@ func (b *Benchmark) exec() {
 	}
 
 	b.driver.MemCopyD2H(b.context, b.hOutputData, b.dOutputData)
+
+	// Free memory
+	b.driver.FreeMemory(b.context, b.dInputData)
+	b.driver.FreeMemory(b.context, b.dOutputData)
+	for i := range b.gpus {
+		b.driver.FreeMemory(b.context, b.dMasks[i])
+	}
+
+	for _, ptr := range allCoData {
+        if ptr != 0 { 
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+    for _, ptr := range allKernArgData {
+        if ptr != 0 {
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+	for _, ptr := range allPackets {
+        if ptr != 0 {
+            b.driver.FreeMemory(b.context, ptr)
+        }
+    }
 }
 
 // Verify verifies
@@ -235,4 +286,115 @@ func (b *Benchmark) cpuSimpleConvolution() []uint32 {
 	}
 
 	return cpuOutputData
+}
+
+func (b *Benchmark) lazyInitMem() {
+	if b.useUnifiedMemory {
+		panic("lazy init does not support unified memory")
+	}
+	
+	numInputData := (b.Width + b.padWidth) * (b.Height + b.padHeight)
+	numOutputData := b.Width * b.Height
+
+	b.hInputData = make([]uint32, numInputData)
+	b.hOutputData = make([]uint32, numOutputData)
+	b.hMask = make([]float32, b.maskSize*b.maskSize)
+
+	for i := uint32(0); i < numInputData; i++ {
+		// b.hInputData[i] = i
+		b.hInputData[i] = 1
+	}
+
+	for i := uint32(0); i < b.maskSize*b.maskSize; i++ {
+		// b.hMask[i] = float32(i)
+		b.hMask[i] = float32(1)
+	}
+
+	b.driver.LazyMemCopyH2D(b.context, b.hInputData, uint64(numInputData*4))
+	b.dInputData = b.driver.AllocatedVAddr
+	// b.driver.LazyMemCopyH2D(b.context, b.hOutputData, uint64(numOutputData*4))
+	// b.dOutputData = b.driver.AllocatedVAddr
+	b.dOutputData = b.dInputData
+	
+	log.Printf("dInputData: 0x%x, dOutputData: 0x%x\n",
+		b.dInputData, b.dOutputData)
+	
+	b.dMasks = make([]driver.Ptr, len(b.gpus))
+	for i, gpu := range b.gpus {
+		b.driver.SelectGPU(b.context, gpu)
+		
+		b.driver.LazyMemCopyH2D(b.context, b.hMask, uint64(b.maskSize*b.maskSize*4))
+		b.dMasks[i]  = b.driver.AllocatedVAddr
+		
+		log.Printf("dMasks[%d]: 0x%x\n",
+			i, b.dMasks[i])
+	}
+
+}
+
+func (b *Benchmark) saveExec() {
+	queues := make([]*driver.CommandQueue, len(b.gpus))
+
+	var allCoData []driver.Ptr
+    var allKernArgData []driver.Ptr
+    var allPackets []driver.Ptr
+
+	for i, gpu := range b.gpus {
+		b.driver.SelectGPU(b.context, gpu)
+		queues[i] = b.driver.CreateCommandQueue(b.context)
+
+		gridSize := ((b.Width + b.padWidth) * (b.Height + b.padHeight)) /
+			uint32(len(b.gpus))
+
+		kernArg := KernelArgs{
+			b.dInputData,
+			b.dMasks[i],
+			b.dOutputData,
+			[2]uint32{b.Width, b.Height},
+			[2]uint32{b.maskSize, b.maskSize},
+			b.Width + b.padWidth,
+			0,
+			uint64(gridSize * uint32(i)), 0, 0,
+		}
+
+		dCoData, dKernArgData, dPacket := b.driver.LazyEnqueueLaunchKernel(
+			queues[i],
+			b.kernel,
+			[3]uint32{gridSize, 1, 1},
+			[3]uint16{uint16(64), 1, 1},
+			&kernArg,
+		)
+
+		allCoData = append(allCoData, dCoData)
+        allKernArgData = append(allKernArgData, dKernArgData)
+        allPackets = append(allPackets, dPacket)
+	}
+
+	for _, q := range queues {
+		b.driver.DrainCommandQueue(q)
+	}
+
+	// Free memory
+	for i := range b.gpus {
+		b.driver.FreeMemory(b.context, b.dMasks[i])
+	}
+	
+	for _, ptr := range allCoData {
+		if ptr != 0 { 
+			b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+    for _, ptr := range allKernArgData {
+		if ptr != 0 {
+			b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+	for _, ptr := range allPackets {
+		if ptr != 0 {
+			b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+	
+	b.driver.MemCopyD2H(b.context, b.hOutputData, b.dOutputData)
+	b.driver.FreeMemory(b.context, b.dInputData)
 }

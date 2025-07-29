@@ -310,15 +310,6 @@ func (b *Benchmark) lazyInitMem() {
 		b.hMask[i] = float32(1)
 	}
 
-	b.driver.LazyMemCopyH2D(b.context, b.hInputData, uint64(numInputData*4))
-	b.dInputData = b.driver.AllocatedVAddr
-	// b.driver.LazyMemCopyH2D(b.context, b.hOutputData, uint64(numOutputData*4))
-	// b.dOutputData = b.driver.AllocatedVAddr
-	b.dOutputData = b.dInputData
-	
-	log.Printf("dInputData: 0x%x, dOutputData: 0x%x\n",
-		b.dInputData, b.dOutputData)
-	
 	b.dMasks = make([]driver.Ptr, len(b.gpus))
 	for i, gpu := range b.gpus {
 		b.driver.SelectGPU(b.context, gpu)
@@ -327,9 +318,16 @@ func (b *Benchmark) lazyInitMem() {
 		b.dMasks[i]  = b.driver.AllocatedVAddr
 		
 		log.Printf("dMasks[%d]: 0x%x\n",
-			i, b.dMasks[i])
+		i, b.dMasks[i])
 	}
+	
+	b.driver.LazyMemCopyH2D(b.context, b.hInputData, uint64(numInputData*4))
+	b.dInputData = b.driver.AllocatedVAddr
+	b.dOutputData = b.driver.AllocateMemory(b.context,
+		uint64(numOutputData*4))
 
+	log.Printf("dInputData: 0x%x, dOutputData: 0x%x\n",
+		b.dInputData, b.dOutputData)
 }
 
 func (b *Benchmark) saveExec() {
@@ -373,7 +371,8 @@ func (b *Benchmark) saveExec() {
 	for _, q := range queues {
 		b.driver.DrainCommandQueue(q)
 	}
-
+	
+	b.driver.FreeMemory(b.context, b.dInputData)
 	// Free memory
 	for i := range b.gpus {
 		b.driver.FreeMemory(b.context, b.dMasks[i])
@@ -396,5 +395,5 @@ func (b *Benchmark) saveExec() {
     }
 	
 	b.driver.MemCopyD2H(b.context, b.hOutputData, b.dOutputData)
-	b.driver.FreeMemory(b.context, b.dInputData)
+	b.driver.FreeMemory(b.context, b.dOutputData)
 }

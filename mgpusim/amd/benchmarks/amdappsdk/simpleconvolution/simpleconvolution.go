@@ -96,6 +96,8 @@ func (b *Benchmark) Run() {
 	if b.saveMemory {
 		b.lazyInitMem()
 		b.saveExec()
+		// b.lazyInitMem2()
+		// b.saveExec2()
 	} else {
 		b.initMem()
 		b.exec()
@@ -309,7 +311,10 @@ func (b *Benchmark) lazyInitMem() {
 		// b.hMask[i] = float32(i)
 		b.hMask[i] = float32(1)
 	}
-
+	
+	b.driver.LazyMemCopyH2D(b.context, b.hInputData, uint64(numInputData*4))
+	b.dInputData = b.driver.AllocatedVAddr
+	
 	b.dMasks = make([]driver.Ptr, len(b.gpus))
 	for i, gpu := range b.gpus {
 		b.driver.SelectGPU(b.context, gpu)
@@ -321,8 +326,6 @@ func (b *Benchmark) lazyInitMem() {
 		i, b.dMasks[i])
 	}
 	
-	b.driver.LazyMemCopyH2D(b.context, b.hInputData, uint64(numInputData*4))
-	b.dInputData = b.driver.AllocatedVAddr
 	b.dOutputData = b.driver.AllocateMemory(b.context,
 		uint64(numOutputData*4))
 
@@ -372,8 +375,8 @@ func (b *Benchmark) saveExec() {
 		b.driver.DrainCommandQueue(q)
 	}
 	
-	b.driver.FreeMemory(b.context, b.dInputData)
 	// Free memory
+	b.driver.FreeMemory(b.context, b.dInputData)
 	for i := range b.gpus {
 		b.driver.FreeMemory(b.context, b.dMasks[i])
 	}
@@ -396,4 +399,117 @@ func (b *Benchmark) saveExec() {
 	
 	b.driver.MemCopyD2H(b.context, b.hOutputData, b.dOutputData)
 	b.driver.FreeMemory(b.context, b.dOutputData)
+}
+
+// b.dOutputData = b.dInputData
+func (b *Benchmark) lazyInitMem2() {
+	if b.useUnifiedMemory {
+		panic("lazy init does not support unified memory")
+	}
+	
+	numInputData := (b.Width + b.padWidth) * (b.Height + b.padHeight)
+	numOutputData := b.Width * b.Height
+
+	b.hInputData = make([]uint32, numInputData)
+	b.hOutputData = make([]uint32, numOutputData)
+	b.hMask = make([]float32, b.maskSize*b.maskSize)
+
+	for i := uint32(0); i < numInputData; i++ {
+		// b.hInputData[i] = i
+		b.hInputData[i] = 1
+	}
+
+	for i := uint32(0); i < b.maskSize*b.maskSize; i++ {
+		// b.hMask[i] = float32(i)
+		b.hMask[i] = float32(1)
+	}
+
+	b.dMasks = make([]driver.Ptr, len(b.gpus))
+	for i, gpu := range b.gpus {
+		b.driver.SelectGPU(b.context, gpu)
+		
+		b.driver.LazyMemCopyH2D(b.context, b.hMask, uint64(b.maskSize*b.maskSize*4))
+		b.dMasks[i]  = b.driver.AllocatedVAddr
+		
+		log.Printf("dMasks[%d]: 0x%x\n",
+		i, b.dMasks[i])
+	}
+	
+	b.driver.LazyMemCopyH2D(b.context, b.hInputData, uint64(numInputData*4))
+	b.dInputData = b.driver.AllocatedVAddr
+	b.dOutputData = b.dInputData
+	// b.dOutputData = b.driver.AllocateMemory(b.context,
+	// 	uint64(numOutputData*4))
+
+	log.Printf("dInputData: 0x%x, dOutputData: 0x%x\n",
+		b.dInputData, b.dOutputData)
+}
+
+func (b *Benchmark) saveExec2() {
+	queues := make([]*driver.CommandQueue, len(b.gpus))
+
+	var allCoData []driver.Ptr
+    var allKernArgData []driver.Ptr
+    var allPackets []driver.Ptr
+
+	for i, gpu := range b.gpus {
+		b.driver.SelectGPU(b.context, gpu)
+		queues[i] = b.driver.CreateCommandQueue(b.context)
+
+		gridSize := ((b.Width + b.padWidth) * (b.Height + b.padHeight)) /
+			uint32(len(b.gpus))
+
+		kernArg := KernelArgs{
+			b.dInputData,
+			b.dMasks[i],
+			b.dOutputData,
+			[2]uint32{b.Width, b.Height},
+			[2]uint32{b.maskSize, b.maskSize},
+			b.Width + b.padWidth,
+			0,
+			uint64(gridSize * uint32(i)), 0, 0,
+		}
+
+		dCoData, dKernArgData, dPacket := b.driver.LazyEnqueueLaunchKernel(
+			queues[i],
+			b.kernel,
+			[3]uint32{gridSize, 1, 1},
+			[3]uint16{uint16(64), 1, 1},
+			&kernArg,
+		)
+
+		allCoData = append(allCoData, dCoData)
+        allKernArgData = append(allKernArgData, dKernArgData)
+        allPackets = append(allPackets, dPacket)
+	}
+
+	for _, q := range queues {
+		b.driver.DrainCommandQueue(q)
+	}
+	
+	// b.driver.FreeMemory(b.context, b.dInputData)
+	// Free memory
+	for i := range b.gpus {
+		b.driver.FreeMemory(b.context, b.dMasks[i])
+	}
+	
+	for _, ptr := range allCoData {
+		if ptr != 0 { 
+			b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+    for _, ptr := range allKernArgData {
+		if ptr != 0 {
+			b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+	for _, ptr := range allPackets {
+		if ptr != 0 {
+			b.driver.FreeMemory(b.context, ptr)
+        }
+    }
+	
+	b.driver.MemCopyD2H(b.context, b.hOutputData, b.dOutputData)
+	b.driver.FreeMemory(b.context, b.dInputData)
+	// b.driver.FreeMemory(b.context, b.dOutputData)
 }

@@ -421,10 +421,10 @@
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "program": "${workspaceFolder}/samples/xor",
+            "program": "${workspaceFolder}/mgpusim/amd/samples/xor",
             "args": [
                 "-timing",
-                "-no-progress-bar"
+                // "-no-progress-bar"
             ]
         },
         {
@@ -483,6 +483,17 @@
             "mode": "debug",
             "program": "${workspaceFolder}/samples/server",
             "args": []
-        }
+        },
+        {
+            "name": "MLP",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/mgpusim/amd/samples/mlp",
+            "args": [
+                "-timing",
+                // "-mnist-data-folder=/home/yifan/dev/src/gitlab.com/akita/dnn/dataset/mnist/data/"
+            ]
+        },
     ]
 }

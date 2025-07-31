@@ -245,11 +245,11 @@ func (d *Driver) LazyEnqueueLaunchKernel(
 		d.LazyEnqueueMemCopyH2D(queue, packet, uint64(binary.Size(packet)))
 		d.DrainCommandQueue(queue)
 		dPacket = d.AllocatedVAddr
+		
+		d.enqueueLaunchKernelCommand(queue, co, packet, dPacket)
 
 		log.Printf("dCoData: 0x%x, dKernArgData: 0x%x, dPacket: 0x%x\n",
 			dCoData, dKernArgData, dPacket)
-
-		d.enqueueLaunchKernelCommand(queue, co, packet, dPacket)
 
 		return dCoData, dKernArgData, dPacket
 	}

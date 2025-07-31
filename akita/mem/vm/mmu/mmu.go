@@ -1,6 +1,7 @@
 package mmu
 
 import (
+	"fmt"
 	"log"
 	"reflect"
 
@@ -95,6 +96,7 @@ func (m *middleware) finalizePageWalk(
 	page, found := m.pageTable.Find(req.PID, req.VAddr)
 
 	if !found {
+		fmt.Printf("req.PID: %d, req.VAddr: 0x%x\n", req.PID, req.VAddr)
 		panic("page not found")
 	}
 
@@ -176,6 +178,7 @@ func (m *middleware) sendMigrationToDriver() (madeProgress bool) {
 	page, found := m.pageTable.Find(req.PID, req.VAddr)
 
 	if !found {
+		fmt.Printf("req.PID: %d, req.VAddr: 0x%x\n", req.PID, req.VAddr)
 		panic("page not found")
 	}
 
@@ -267,6 +270,7 @@ func (m *middleware) processMigrationReturn() bool {
 	page, found := m.pageTable.Find(req.PID, req.VAddr)
 
 	if !found {
+		fmt.Printf("req.PID: %d, req.VAddr: 0x%x\n", req.PID, req.VAddr)
 		panic("page not found")
 	}
 

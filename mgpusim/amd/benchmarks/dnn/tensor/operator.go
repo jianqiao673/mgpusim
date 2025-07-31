@@ -342,7 +342,7 @@ func (to CPUOperator) Sum(t Tensor, axis []int) Tensor {
 	var next *SimpleTensor
 	for i, a := range axis {
 		next = to.sumOneAxis(curr, a-i)
-		to.Free(curr)
+		// to.Free(curr)
 		curr = next
 	}
 

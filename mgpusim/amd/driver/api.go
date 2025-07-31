@@ -222,8 +222,28 @@ func unique(in []int) []int {
 	return list
 }
 
-// [TODO] FreeMemory seams to free one page at a time, not the whole memory,
-// need to check if this is the intended behavior.
+// FreePage frees a page in the GPU memory space.
+func (d *Driver) FreePage(ctx *Context, ptr Ptr) error {
+	freeReq := mem.FreeReqBuilder{}.
+	WithDeviceID(uint64(ctx.currentGPUID)).
+	WithPID(ctx.pid).
+	Build()
+	tracing.TraceReqInitiate(freeReq, d, tracing.MsgIDAtReceiver(freeReq, d))
+	
+	pAddr := d.memAllocator.Free(uint64(ptr))
+	
+	for i, buffer := range ctx.buffers {
+		if buffer.vAddr == ptr {
+			ctx.buffers[i].freed = true
+		}
+	}
+	
+	freeReq.SetAddress(pAddr)
+	tracing.TraceReqFinalize(freeReq, d)
+	
+	log.Printf("[FreePage] pid: %d, deviceid: %d, vAddr: 0x%x, pAddr: 0x%x\n", ctx.pid, ctx.currentGPUID, ptr, pAddr)
+	return nil
+}
 
 // FreeMemory frees the memory pointed by ptr. The pointer must be allocated
 // with the function AllocateMemory earlier. Error will be returned if the ptr
@@ -250,7 +270,7 @@ func (d *Driver) FreeMemory(ctx *Context, ptr Ptr) error {
 			ctx.buffers[i].freed = true
 			
 			tracing.TraceReqFinalize(freeReq, d)
-			log.Printf("[Free] pid: %d, deviceid: %d, vAddr: 0x%x, byteSize: %d\n", ctx.pid, ctx.currentGPUID, ptr, buffer.size)
+			log.Printf("[FreeMemory] pid: %d, deviceid: %d, vAddr: 0x%x, byteSize: %d\n", ctx.pid, ctx.currentGPUID, ptr, buffer.size)
 		}
 	}
 	return nil

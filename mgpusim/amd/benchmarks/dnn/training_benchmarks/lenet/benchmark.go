@@ -31,6 +31,8 @@ type Benchmark struct {
 	MaxBatchPerEpoch   int
 	EnableVerification bool
 	EnableTesting      bool
+
+	saveMemory bool
 }
 
 // NewBenchmark creates a new benchmark.
@@ -194,4 +196,9 @@ func (b *Benchmark) Verify() {
 // SetUnifiedMemory asks the benchmark to use unified memory.
 func (b *Benchmark) SetUnifiedMemory() {
 	panic("unified memory is not supported by dnn workloads")
+}
+
+// SetMemorySaving sets the memory saving mode
+func (b *Benchmark) SetMemorySaving() {
+	b.saveMemory = true
 }

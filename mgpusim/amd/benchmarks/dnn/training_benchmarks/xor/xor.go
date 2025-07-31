@@ -22,6 +22,8 @@ type Benchmark struct {
 
 	network training.Network
 	trainer training.Trainer
+
+	saveMemory bool
 }
 
 // NewBenchmark creates a new benchmark.
@@ -55,8 +57,8 @@ func NewBenchmark(driver *driver.Driver) *Benchmark {
 		Network:         b.network,
 		LossFunc:        training.NewSoftmaxCrossEntropy(b.to),
 		OptimizationAlg: optimization.NewAdam(b.to, 0.03),
-		Epoch:           50,
-		BatchSize:       4,
+		Epoch:           1, // default: 50
+		BatchSize:       20, // default: 4
 		ShowBatchInfo:   true,
 	}
 
@@ -102,4 +104,9 @@ func (b *Benchmark) Verify() {
 // SetUnifiedMemory asks the benchmark to use unified memory.
 func (b *Benchmark) SetUnifiedMemory() {
 	panic("unified memory is not supported by dnn workloads")
+}
+
+// SetMemorySaving sets the memory saving mode
+func (b *Benchmark) SetMemorySaving() {
+	b.saveMemory = true
 }

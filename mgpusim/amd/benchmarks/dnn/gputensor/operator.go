@@ -229,9 +229,10 @@ func f64SliceToF32Slice(in []float64) []float32 {
 
 // Free releases the allocated GPU memory.
 func (o *GPUOperator) Free(t tensor.Tensor) {
-	// o.driver.FreeMemory(o.ctx, t.(*Tensor).ptr)
+	fmt.Printf("[Free tensor] ptr: 0x%x, size: %d\n", t.(*Tensor).ptr, t.NumElement()*sizeOfFloat32)
+	o.driver.FreeMemory(o.ctx, t.(*Tensor).ptr)
 	// o.driver.FreePage(o.ctx, t.(*Tensor).ptr)
-	// t.(*Tensor).ptr = 0
+	t.(*Tensor).ptr = 0
 }
 
 // Copy copies data from one tensor to another tensor. The src and dst tensor

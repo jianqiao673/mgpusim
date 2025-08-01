@@ -83,8 +83,11 @@ func (l *FullyConnectedLayer) Forward(
 
 	l.to.Free(in)
 	l.to.Free(weightMat)
-	l.to.Free(biasMat)
-	l.to.Free(biasMatReshape)
+
+	// fmt.Printf("biasMat: 0x%x, biasMatReshape: 0x%x\n", 
+	// 	biasMat, biasMatReshape)
+	// l.to.Free(biasMat) // if free, then page not found
+	// l.to.Free(biasMatReshape) // if free, then value mismatch
 
 	return out
 }

@@ -210,9 +210,16 @@ func (o *GPUOperator) CreateWithData(
 	descriptor string,
 ) tensor.Tensor {
 	t := o.Create(size).(*Tensor)
+
+	if t.NumElement() == 0 {
+		return nil
+	}
+
 	t.descriptor = descriptor
 
 	f32Data := f64SliceToF32Slice(data)
+
+	fmt.Printf("[CreateWithData] size: %d\n", uint64(t.NumElement()*sizeOfFloat32))
 
 	o.driver.MemCopyH2D(o.ctx, t.ptr, f32Data)
 
@@ -1665,9 +1672,16 @@ func (o *GPUOperator) LazyCreateWithData(
 	descriptor string,
 ) tensor.Tensor {
 	t := o.PureCreate(size).(*Tensor)
+
+	if t.NumElement() == 0 {
+		return nil
+	}
+
 	t.descriptor = descriptor
 
 	f32Data := f64SliceToF32Slice(data)
+
+	fmt.Printf("[LazyCreateWithData] size: %d\n", uint64(t.NumElement()*sizeOfFloat32))
 
 	o.driver.LazyMemCopyH2D(o.ctx, f32Data, uint64(t.NumElement()*sizeOfFloat32))
 	t.ptr = o.driver.AllocatedVAddr

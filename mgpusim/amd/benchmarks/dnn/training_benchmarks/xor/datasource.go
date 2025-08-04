@@ -59,3 +59,25 @@ func (ds *DataSource) NextBatch(batchSize int) (
 func (ds *DataSource) Rewind() {
 	ds.currPtr = 0
 }
+
+// NextBatch returns the next batch of data.
+func (ds *DataSource) LazyNextBatch(batchSize int) (
+	data tensor.Tensor,
+	label []int,
+) {
+	start := ds.currPtr
+	end := start + batchSize
+
+	if end > len(ds.allLabel) {
+		end = len(ds.allLabel)
+	}
+
+	rawData := ds.allData[start*ds.imageSize : end*ds.imageSize]
+	data = ds.to.LazyCreateWithData(rawData, []int{end - start, ds.imageSize}, "")
+
+	label = ds.allLabel[start:end]
+
+	ds.currPtr = end
+
+	return data, label
+}

@@ -144,3 +144,32 @@ func calculateAccuracy(output tensor.Tensor, inputLabel []int) float64 {
 
 	return float64(correct) / float64(size[0])
 }
+
+// Train will run the training algorithm on the network.
+func (t Trainer) SaveTrain() {
+	for currentEpoch := 0; currentEpoch < t.Epoch; currentEpoch++ {
+		log.Printf("Epoch %d\n", currentEpoch)
+
+		t.DataSource.Rewind()
+
+		batchNum := 0
+		for {
+			if t.ShowBatchInfo {
+				log.Printf("Batch %d\n", batchNum)
+			}
+
+			data, label := t.DataSource.LazyNextBatch(t.BatchSize)
+			if len(label) == 0 {
+				break
+			}
+
+			output := t.forward(data)
+			derivative := t.calculateLoss(output, label)
+			t.backward(derivative)
+			t.updateParameters()
+			batchNum++
+		}
+
+		t.test()
+	}
+}

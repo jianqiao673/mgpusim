@@ -424,7 +424,8 @@
             "program": "${workspaceFolder}/mgpusim/amd/samples/xor",
             "args": [
                 "-timing",
-                // "-no-progress-bar"
+                // "-no-progress-bar",
+                // "-save-memory",
             ]
         },
         {

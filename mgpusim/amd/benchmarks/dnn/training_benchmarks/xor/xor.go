@@ -88,7 +88,11 @@ func (b *Benchmark) Run() {
 	
 		}
 	}
-	b.trainer.Train()
+	if b.saveMemory {
+		b.trainer.SaveTrain()
+	} else {
+		b.trainer.Train()
+	}
 }
 
 func (b *Benchmark) printLayerParams() {

@@ -6,4 +6,6 @@ import "github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/tensor"
 type DataSource interface {
 	NextBatch(batchSize int) (data tensor.Tensor, label []int)
 	Rewind()
+
+	LazyNextBatch(batchSize int) (data tensor.Tensor, label []int)
 }

@@ -18,4 +18,7 @@ type Layer interface {
 
 	// Gradients retrieves all the gradients of the layer parameters.
 	Gradients() tensor.Tensor
+
+	// LazyRandomize lazily creates random initial parameters for the layer.
+	LazyRandomize()
 }

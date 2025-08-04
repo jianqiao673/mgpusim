@@ -58,6 +58,8 @@ type Operator interface {
 
 	ReluForward(in Tensor) Tensor
 	ReluBackward(forwardIn, backwardIn Tensor) Tensor
+
+	LazyInit(t Tensor, data []float64)
 }
 
 // CPUOperator can process CPU tensors.
@@ -955,4 +957,9 @@ func (to CPUOperator) numElementMustMatch(t1, t2 Tensor) {
 	if numElement(t1.Size()) != numElement(t2.Size()) {
 		panic("number of element mismatch")
 	}
+}
+
+// LazyInit of the cpu operator does nothing.
+func (to CPUOperator) LazyInit(t Tensor, data []float64) {
+	// This function is intentionally left blank
 }

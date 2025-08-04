@@ -168,3 +168,20 @@ func (l FullyConnectedLayer) Parameters() tensor.Tensor {
 func (l FullyConnectedLayer) Gradients() tensor.Tensor {
 	return l.gradients
 }
+
+// LazyRandomize lazily initialize the parameters of the layer randomly.
+func (l *FullyConnectedLayer) LazyRandomize() {
+	numWeight := l.InputSize * l.OutputSize
+	weights := make([]float64, numWeight)
+	for i := 0; i < numWeight; i++ {
+		weights[i] = (rand.Float64() - 0.5) / float64(l.InputSize) * 2
+	}
+	l.to.LazyInit(l.weights, weights)
+
+	numBias := l.OutputSize
+	bias := make([]float64, numBias)
+	for i := 0; i < numBias; i++ {
+		bias[i] = rand.Float64()*2 - 1
+	}
+	l.to.LazyInit(l.bias, bias)
+}

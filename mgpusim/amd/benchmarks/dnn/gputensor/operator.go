@@ -197,6 +197,8 @@ func (o *GPUOperator) Create(size []int) tensor.Tensor {
 
 	t.ptr = o.driver.AllocateMemory(o.ctx, uint64(t.NumElement()*sizeOfFloat32))
 
+	fmt.Printf("[Create Tersor] vAddr: 0x%x, byteSize: %d\n", t.ptr, size)
+
 	return t
 }
 
@@ -1637,6 +1639,129 @@ func (o *GPUOperator) ReluBackward(
 		cpuOut := o.cpuOperator.ReluBackward(cpuForwardIn, cpuBackIn)
 		o.tensorMustMatch(cpuOut, out)
 		fmt.Println("ReluBackward verified.")
+	}
+
+	return out
+}
+
+// PureCreate creates a new GPU tensor without allocating memory.
+func (o *GPUOperator) PureCreate(size []int) tensor.Tensor {
+	t := &Tensor{
+		driver: o.driver,
+		ctx:    o.ctx,
+		size:   size,
+	}
+
+	fmt.Printf("[PureCreate Tersor] vAddr: 0x%x, byteSize: %d\n", t.ptr, size)
+
+	return t
+}
+
+// LazyCreateWithData creates the tensor and 
+// lazily copies the given data to the GPU memory.
+func (o *GPUOperator) LazyCreateWithData(
+	data []float64,
+	size []int,
+	descriptor string,
+) tensor.Tensor {
+	t := o.PureCreate(size).(*Tensor)
+	t.descriptor = descriptor
+
+	f32Data := f64SliceToF32Slice(data)
+
+	o.driver.LazyMemCopyH2D(o.ctx, f32Data, uint64(t.NumElement()*sizeOfFloat32))
+	t.ptr = o.driver.AllocatedVAddr
+
+	return t
+}
+
+// Clone duplicates the input tensor.
+func (o *GPUOperator) LazyClone(t tensor.Tensor) tensor.Tensor {
+	inT := t.(*Tensor)
+	outT := o.Create(t.Size()).(*Tensor)
+
+	outT.size = make([]int, len(inT.size))
+	copy(outT.size, inT.size)
+
+	o.Copy(outT, inT)
+
+	return outT
+}
+
+// LazyInit sets the data of the tensor, and allocates memory just before memory copy.
+func (o *GPUOperator) LazyInit(t tensor.Tensor, data []float64) {
+	if t.NumElement() != len(data) {
+		panic("mismatch in buffer shape")
+	}
+
+	f32Data := f64SliceToF32Slice(data)
+
+	o.driver.LazyMemCopyH2D(o.ctx, f32Data, uint64(t.NumElement()*sizeOfFloat32))
+	t.(*Tensor).ptr = o.driver.AllocatedVAddr
+}
+
+// ReluForward Implementation
+func (o *GPUOperator) LazyReluForward(
+	in tensor.Tensor,
+) tensor.Tensor {
+	log.Printf("GPUOperator ReluForward")
+
+	out := o.Create(in.Size()).(*Tensor)
+	out.descriptor = in.Descriptor()
+
+	args := reluForwardKernelArgs{
+		In:    in.(*Tensor).ptr,
+		Out:   out.ptr,
+		Count: int32(in.NumElement()),
+	}
+
+	o.timerStart()
+	o.driver.LaunchKernel(o.ctx, o.reluForwardKernel,
+		[3]uint32{uint32(in.NumElement()), 1, 1},
+		[3]uint16{64, 1, 1},
+		&args)
+	o.timerEnd("ReluForward")
+
+	if o.verification {
+		cpuIn := o.gpuTensorToCPUTensor(in)
+		cpuOut := o.cpuOperator.ReluForward(cpuIn)
+		o.tensorMustMatch(cpuOut, out)
+		fmt.Println("ReluForward verified.")
+	}
+
+	return out
+}
+
+// ElementWiseMul calculates the element multiplication of A and B.
+func (o *GPUOperator) LazyElementWiseMul(
+	a, b tensor.Tensor,
+) tensor.Tensor {
+	if a.NumElement() != b.NumElement() {
+		panic("size not match")
+	}
+
+	out := o.Create(a.Size()).(*Tensor)
+	args := elemWiseMulKernArg{
+		Out: out.ptr,
+		In1: a.(*Tensor).ptr,
+		In2: b.(*Tensor).ptr,
+		N:   int32(a.NumElement()),
+	}
+
+	o.timerStart()
+	o.driver.LaunchKernel(o.ctx, o.elemWiseMulKernel,
+		[3]uint32{uint32(a.NumElement()), 1, 1},
+		[3]uint16{64, 1, 1},
+		&args,
+	)
+	o.timerEnd("ElementWiseMul")
+
+	if o.verification {
+		cpuA := o.gpuTensorToCPUTensor(a)
+		cpuB := o.gpuTensorToCPUTensor(a)
+		cpuOut := o.cpuOperator.ElementWiseMul(cpuA, cpuB)
+		o.tensorMustMatch(cpuOut, out)
+		fmt.Println("ElementWiseMul verified.")
 	}
 
 	return out

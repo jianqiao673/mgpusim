@@ -81,9 +81,13 @@ func (b *Benchmark) SelectGPU(gpuIDs []int) {
 // Run executes the benchmark.
 func (b *Benchmark) Run() {
 	for _, l := range b.network.Layers {
-		l.Randomize()
+		if b.saveMemory {
+			l.LazyRandomize()
+		} else {
+			l.Randomize()
+	
+		}
 	}
-
 	b.trainer.Train()
 }
 

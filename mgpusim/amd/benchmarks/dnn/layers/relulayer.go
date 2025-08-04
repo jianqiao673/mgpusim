@@ -44,3 +44,8 @@ func (r ReluLayer) Parameters() tensor.Tensor {
 func (r ReluLayer) Gradients() tensor.Tensor {
 	return nil
 }
+
+// LazyRandomize of the relu layer does nothing.
+func (r *ReluLayer) LazyRandomize() {
+	// This function is intentionally left blank
+}

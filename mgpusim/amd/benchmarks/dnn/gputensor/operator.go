@@ -219,9 +219,9 @@ func (o *GPUOperator) CreateWithData(
 
 	f32Data := f64SliceToF32Slice(data)
 
-	fmt.Printf("[CreateWithData] size: %d\n", uint64(t.NumElement()*sizeOfFloat32))
-
 	o.driver.MemCopyH2D(o.ctx, t.ptr, f32Data)
+
+	fmt.Printf("[CreateWithData] tensor: 0x%x, vAddr: 0x%x, byteSize: %d\n",t, t.ptr, uint64(t.NumElement()*sizeOfFloat32))
 
 	return t
 }
@@ -1695,11 +1695,10 @@ func (o *GPUOperator) LazyCreateWithData(
 
 	f32Data := f64SliceToF32Slice(data)
 
-	fmt.Printf("[LazyCreateWithData] size: %d\n", uint64(t.NumElement()*sizeOfFloat32))
-
 	o.driver.LazyMemCopyH2D(o.ctx, f32Data, uint64(t.NumElement()*sizeOfFloat32))
 	t.ptr = o.driver.AllocatedVAddr
-
+	
+	fmt.Printf("[LazyCreateWithData] tensor: 0x%x, vAddr: 0x%x, byteSize: %d\n",t, t.ptr, uint64(t.NumElement()*sizeOfFloat32))
 	return t
 }
 

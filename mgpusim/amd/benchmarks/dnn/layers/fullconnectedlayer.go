@@ -48,6 +48,12 @@ func NewFullyConnectedLayer(
 	l.weightGradients = to.Slice(l.gradients, 0, numWeight)
 	l.biasGradients = to.Slice(l.gradients, numWeight, numParams)
 
+	fmt.Printf("[NewFullyConnectedLayer] parameters: 0x%x, weights: 0x%x, bias: 0x%x\n", 
+		l.parameters, l.weights, l.bias)
+		
+	fmt.Printf("[NewFullyConnectedLayer] gradients: 0x%x, weightGradients: 0x%x, biasGradients: 0x%x\n", 
+		l.gradients, l.weightGradients, l.biasGradients)
+
 	return l
 }
 
@@ -189,10 +195,6 @@ func SaveNewFullyConnectedLayer(
 		gradients:  to.Create([]int{numParams}),
 	}
 
-	// fmt.Printf("[SaveNewFullyConnectedLayer] parameters: 0x%x, gradients: 0x%x\n", l.parameters, l.gradients)
-
-	// l.weights = to.Slice(l.parameters, 0, numWeight)
-	// l.bias = to.Slice(l.parameters, numWeight, numParams)
 	l.weightGradients = to.Slice(l.gradients, 0, numWeight)
 	l.biasGradients = to.Slice(l.gradients, numWeight, numParams)
 
@@ -224,4 +226,6 @@ func (l *FullyConnectedLayer) LazyRandomize() {
 	l.parameters = slices[0]
 	l.weights = slices[1]
 	l.bias = slices[2]
+
+	fmt.Printf("[LazyRandomize] parameters: 0x%x, weights: 0x%x, bias: 0x%x\n", l.parameters, l.weights, l.bias)
 }

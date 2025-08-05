@@ -229,3 +229,29 @@ func (l *FullyConnectedLayer) LazyRandomize() {
 
 	fmt.Printf("[LazyRandomize] parameters: 0x%x, weights: 0x%x, bias: 0x%x\n", l.parameters, l.weights, l.bias)
 }
+
+// SaveForward performs the forward propagation operation
+// in a memory saving way.
+func (l *FullyConnectedLayer) SaveForward(
+	input tensor.Tensor,
+) tensor.Tensor {
+	l.forwardInput = l.to.Clone(input)
+
+	in := l.to.Reshape(input, []int{input.Size()[0], l.InputSize})
+	weightMat := l.to.Reshape(l.weights, []int{l.InputSize, l.OutputSize})
+	biasMat := l.to.Repeat(l.bias, input.Size()[0])
+	biasMatReshape := l.to.Reshape(biasMat,
+		[]int{input.Size()[0], l.OutputSize})
+
+	out := l.to.SaveGemm(false, false, 1, 1, in, weightMat, biasMatReshape)
+
+	l.to.Free(in)
+	l.to.Free(weightMat)
+
+	// fmt.Printf("biasMat: 0x%x, biasMatReshape: 0x%x\n", 
+	// 	biasMat, biasMatReshape)
+	// l.to.Free(biasMat) // if free, then page not found
+	// l.to.Free(biasMatReshape) // if free, then value mismatch
+
+	return out
+}

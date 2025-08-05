@@ -21,4 +21,7 @@ type Layer interface {
 
 	// LazyRandomize lazily creates random initial parameters for the layer.
 	LazyRandomize()
+
+	// SaveForward performs forward propagation in a memory saving way. It stores the input.
+	SaveForward(input tensor.Tensor) tensor.Tensor
 }

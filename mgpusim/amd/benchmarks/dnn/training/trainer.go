@@ -163,7 +163,7 @@ func (t Trainer) SaveTrain() {
 				break
 			}
 
-			output := t.forward(data)
+			output := t.saveForward(data)
 			derivative := t.calculateLoss(output, label)
 			t.backward(derivative)
 			t.updateParameters()
@@ -172,4 +172,22 @@ func (t Trainer) SaveTrain() {
 
 		t.test()
 	}
+}
+
+func (t Trainer) saveForward(data tensor.Tensor) tensor.Tensor {
+	//log.Printf("Forward.\n")
+	var input, output tensor.Tensor
+	output = data
+	for _, l := range t.Network.Layers {
+		input = output
+		//log.Println(t.TO == nil)
+		//t.TO.Dump(input)
+		//log.Println("Input ", t.TO.Dump(input))
+		//if l.Parameters() != nil {
+		//	log.Println("Param ", t.TO.Dump(l.Parameters()))
+		//}
+		output = l.SaveForward(input)
+		//log.Println("Output ", t.TO.Dump(output))
+	}
+	return output
 }

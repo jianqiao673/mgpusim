@@ -62,6 +62,7 @@ type Operator interface {
 	LazyCreateWithData(data []float64, size []int, descriptor string) Tensor
 	LazyInit(t Tensor, data []float64)
 	LazyInitSlices(datas [][]float64, nums []int, allocateNum int) []Tensor
+	SaveGemm(transA, transB bool, alpha, beta float64, a, b, c Tensor) Tensor
 }
 
 // CPUOperator can process CPU tensors.
@@ -977,3 +978,10 @@ func (to CPUOperator) LazyInitSlices(datas [][]float64, nums []int, allocateNum 
 	// This function is intentionally left blank
 	return nil
 }
+
+// SaveGemm of the cpu operator does nothing.
+func (to CPUOperator) SaveGemm(transA, transB bool, alpha, beta float64, a, b, c Tensor) Tensor {
+	// This function is intentionally left blank
+	return nil
+}
+

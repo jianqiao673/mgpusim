@@ -422,6 +422,6 @@ func (d *Driver) AllocateMemory2(
 	allocateReq.SetAddress(pAddr)
 	tracing.TraceReqFinalize(allocateReq, d)
 
-	log.Printf("[Allocate] pid: %d, deviceid: %d, vAddr: 0x%x, pAddr: 0x%x, byteSize: %d\n", ctx.pid, ctx.currentGPUID, ptr, pAddr, byteSize)
+	log.Printf("[LazyAllocate] pid: %d, deviceid: %d, vAddr: 0x%x, pAddr: 0x%x, byteSize: %d\n", ctx.pid, ctx.currentGPUID, ptr, pAddr, byteSize)
 	return Ptr(ptr), pAddr
 }

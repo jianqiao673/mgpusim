@@ -2,9 +2,9 @@
 
 # 设置默认值
 DEFAULT_PROGRAM="xor"
-DEFAULT_ARGS="-timing -trace-vis"
+# DEFAULT_ARGS="-timing -trace-vis"
 # DEFAULT_ARGS="-timing -trace-vis -verify"
-# DEFAULT_ARGS="-timing -trace-vis -save-memory"
+DEFAULT_ARGS="-timing -trace-vis -save-memory"
 
 # 显示帮助信息
 usage() {

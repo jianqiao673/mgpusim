@@ -1759,6 +1759,78 @@ func (o *GPUOperator) LazyInitSlices(datas [][]float64, nums []int, allocateNum 
 	return slices
 }
 
+// Transpose reorders the axises of the tensor.
+func (o *GPUOperator) SaveTranspose(t tensor.Tensor, order []int) tensor.Tensor {
+	input := t.(*Tensor)
+	if len(order) != len(input.Size()) {
+		panic("order should include all axes")
+	}
+
+	dim := len(order)
+	hOrder := make([]int32, dim)
+	hInSize := make([]int32, dim)
+	hOutSize := make([]int32, dim)
+	outSize := make([]int, dim)
+	for i := 0; i < dim; i++ {
+		hOrder[i] = int32(order[i])
+		hInSize[i] = int32(t.Size()[i])
+		hOutSize[i] = int32(t.Size()[order[i]])
+		outSize[i] = t.Size()[order[i]]
+	}
+
+	// output := o.Create(outSize).(*Tensor)
+	output := o.LazyPureCreate(outSize, t.(*Tensor).ptr).(*Tensor) // output.ptr = input.ptr
+
+	// dOrder := o.driver.AllocateMemory(o.ctx, uint64(dim*sizeOfInt32))
+	o.driver.LazyMemCopyH2D(o.ctx, hOrder, uint64(dim*sizeOfInt32))
+	dOrder := o.driver.AllocatedVAddr
+	defer o.driver.FreeMemory(o.ctx, dOrder)
+
+	// dInSize := o.driver.AllocateMemory(o.ctx, uint64(dim*sizeOfInt32))
+	o.driver.LazyMemCopyH2D(o.ctx, hInSize, uint64(dim*sizeOfInt32))
+	dInSize := o.driver.AllocatedVAddr
+	defer o.driver.FreeMemory(o.ctx, dInSize)
+
+	// dOutSize := o.driver.AllocateMemory(o.ctx, uint64(dim*sizeOfInt32))
+	o.driver.LazyMemCopyH2D(o.ctx, hOutSize, uint64(dim*sizeOfInt32))
+	dOutSize := o.driver.AllocatedVAddr
+	defer o.driver.FreeMemory(o.ctx, dOutSize)
+
+	dInIndexBuf := o.driver.AllocateMemory(o.ctx,
+		uint64(t.NumElement()*dim*sizeOfInt32))
+	defer o.driver.FreeMemory(o.ctx, dInIndexBuf)
+
+	dOutIndexBuf := dInIndexBuf
+	// dOutIndexBuf := o.driver.AllocateMemory(o.ctx,
+	// 	uint64(t.NumElement()*dim*sizeOfInt32))
+	// defer o.driver.FreeMemory(o.ctx, dOutIndexBuf)
+
+	args := transposeKernelArgs{
+		In:          t.(*Tensor).ptr,
+		Out:         output.ptr,
+		InSize:      dInSize,
+		OutSize:     dOutSize,
+		Order:       dOrder,
+		InIndexBuf:  dInIndexBuf,
+		OutIndexBuf: dOutIndexBuf,
+		Dim:         int32(len(order)),
+	}
+
+	o.timerStart()
+	o.driver.LazyLaunchKernel(o.ctx,
+		o.transposeKernel,
+		[3]uint32{uint32(t.NumElement()), 1, 1},
+		[3]uint16{64, 1, 1},
+		&args,
+	)
+	o.timerEnd("Transpose")
+
+	o.setTransposeOutputDescriptor(output, input, order)
+	o.verifyTranspose(output, input, order)
+
+	return output
+}
+
 // ReluForward Implementation
 func (o *GPUOperator) LazyReluForward(
 	in tensor.Tensor,
@@ -1824,4 +1896,89 @@ func (o *GPUOperator) LazyElementWiseMul(
 	}
 
 	return out
+}
+
+// SaveGemm performs alpha * A * B + beta * C operation.
+// It runs kernels in a memory saving way.
+func (o *GPUOperator) SaveGemm(
+	transA, transB bool,
+	alpha, beta float64,
+	a, b, c tensor.Tensor,
+) tensor.Tensor {
+	tempA := a
+	if transA {
+		tempA = o.SaveTranspose(a, []int{1, 0})
+	}
+
+	tempB := b
+	if transB {
+		tempB = o.SaveTranspose(b, []int{1, 0})
+	}
+
+	d := o.saveMatrixMultiplication(alpha, beta, tempA, tempB, c)
+
+	if transA {
+		o.Free(tempA)
+	}
+
+	if transB {
+		o.Free(tempB)
+	}
+
+	// Cannot free a, b, c
+
+	if o.verification {
+		cpuA := o.gpuTensorToCPUTensor(a)
+		cpuB := o.gpuTensorToCPUTensor(b)
+		cpuC := o.gpuTensorToCPUTensor(c)
+		cpuOut := o.cpuOperator.Gemm(
+			transA, transB, alpha, beta, cpuA, cpuB, cpuC)
+		o.tensorMustMatch(cpuOut, d)
+		fmt.Println("Gemm verified.")
+	}
+
+	return d
+}
+
+func (o *GPUOperator) saveMatrixMultiplication(
+	alpha, beta float64,
+	a, b, c tensor.Tensor,
+) tensor.Tensor {
+	fmt.Printf("saveMatrixMultiplication\n")
+
+	o.gemmDimMustBeValid(a, b, c)
+
+	m := a.Size()[0]
+	n := b.Size()[1]
+	k := b.Size()[0]
+
+	blockSize := 16
+	wiWidth := ((n-1)/blockSize + 1) * blockSize
+	wiHeight := ((m-1)/blockSize + 1) * blockSize
+
+	d := o.Create([]int{m, n})
+
+	kernArg := gemmKernArgs{
+		M:     int32(m),
+		N:     int32(n),
+		K:     int32(k),
+		Alpha: float32(alpha),
+		Beta:  float32(beta),
+		A:     a.(*Tensor).ptr,
+		B:     b.(*Tensor).ptr,
+		C:     c.(*Tensor).ptr,
+		D:     d.(*Tensor).ptr,
+	}
+
+	o.timerStart()
+	o.driver.LazyLaunchKernel(
+		o.ctx,
+		o.gemmKernel,
+		[3]uint32{uint32(wiWidth), uint32(wiHeight), 1},
+		[3]uint16{uint16(blockSize), uint16(blockSize), 1},
+		&kernArg,
+	)
+	o.timerEnd("Gemm")
+
+	return d
 }

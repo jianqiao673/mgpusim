@@ -254,3 +254,21 @@ func (d *Driver) LazyEnqueueLaunchKernel(
 		return dCoData, dKernArgData, dPacket
 	}
 }
+
+// LazyLaunchKernel is an easy way to run a kernel on the GCN3 simulator. 
+// It launches the kernel immediately.
+// Compared to LaunchKernel, LazyLaunchKernel lazily allocates memory.
+func (d *Driver) LazyLaunchKernel(
+	ctx *Context,
+	co *insts.HsaCo,
+	gridSize [3]uint32,
+	wgSize [3]uint16,
+	kernelArgs interface{},
+) {
+	queue := d.CreateCommandQueue(ctx)
+	dCoData, dKernArgData, dPacket := d.LazyEnqueueLaunchKernel(queue, co, gridSize, wgSize, kernelArgs)
+	d.DrainCommandQueue(queue)
+	d.FreeMemory(ctx, dCoData)
+	d.FreeMemory(ctx, dKernArgData)
+	d.FreeMemory(ctx, dPacket)
+}

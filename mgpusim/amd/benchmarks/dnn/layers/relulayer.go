@@ -49,3 +49,11 @@ func (r ReluLayer) Gradients() tensor.Tensor {
 func (r *ReluLayer) LazyRandomize() {
 	// This function is intentionally left blank
 }
+
+// [TODO] Forward calculates the forward propagation results.
+func (r *ReluLayer) SaveForward(
+	input tensor.Tensor,
+) tensor.Tensor {
+	r.forwardInput = r.to.Clone(input)
+	return r.to.ReluForward(input)
+}

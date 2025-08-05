@@ -7,5 +7,4 @@ type Benchmark interface {
 	Run()
 	Verify()
 	SetUnifiedMemory()
-	SetMemorySaving()
 }

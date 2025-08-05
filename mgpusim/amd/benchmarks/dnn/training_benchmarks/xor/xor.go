@@ -27,7 +27,7 @@ type Benchmark struct {
 }
 
 // NewBenchmark creates a new benchmark.
-func NewBenchmark(driver *driver.Driver) *Benchmark {
+func NewBenchmark(driver *driver.Driver, saveMemory bool) *Benchmark {
 	b := new(Benchmark)
 
 	b.driver = driver
@@ -35,20 +35,42 @@ func NewBenchmark(driver *driver.Driver) *Benchmark {
 	b.to = gputensor.NewGPUOperator(b.driver, b.context)
 	b.to.EnableVerification()
 
-	b.network = training.Network{
-		Layers: []layers.Layer{
-			layers.NewFullyConnectedLayer(
-				0,
-				b.to,
-				2, 4,
-			),
-			layers.NewReluLayer(b.to),
-			layers.NewFullyConnectedLayer(
-				2,
-				b.to,
-				4, 2,
-			),
-		},
+	if saveMemory {
+		b.setMemorySaving()
+	}
+
+	if b.saveMemory {
+		b.network = training.Network{
+			Layers: []layers.Layer{
+				layers.SaveNewFullyConnectedLayer(
+					0,
+					b.to,
+					2, 4,
+				),
+				layers.NewReluLayer(b.to),
+				layers.SaveNewFullyConnectedLayer(
+					2,
+					b.to,
+					4, 2,
+				),
+			},
+		}
+	} else {
+		b.network = training.Network{
+			Layers: []layers.Layer{
+				layers.NewFullyConnectedLayer(
+					0,
+					b.to,
+					2, 4,
+				),
+				layers.NewReluLayer(b.to),
+				layers.NewFullyConnectedLayer(
+					2,
+					b.to,
+					4, 2,
+				),
+			},
+		}
 	}
 
 	b.trainer = training.Trainer{
@@ -85,7 +107,6 @@ func (b *Benchmark) Run() {
 			l.LazyRandomize()
 		} else {
 			l.Randomize()
-	
 		}
 	}
 	if b.saveMemory {
@@ -115,6 +136,6 @@ func (b *Benchmark) SetUnifiedMemory() {
 }
 
 // SetMemorySaving sets the memory saving mode
-func (b *Benchmark) SetMemorySaving() {
+func (b *Benchmark) setMemorySaving() {
 	b.saveMemory = true
 }

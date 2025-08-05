@@ -1,6 +1,7 @@
 package layers
 
 import (
+	"fmt"
 	"math/rand"
 
 	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/tensor"
@@ -169,19 +170,58 @@ func (l FullyConnectedLayer) Gradients() tensor.Tensor {
 	return l.gradients
 }
 
+// NewFullyConnectedLayer creates a fully connected layer.
+func SaveNewFullyConnectedLayer(
+	index int,
+	to tensor.Operator,
+	inputSize, outputSize int,
+) *FullyConnectedLayer {
+	numWeight := inputSize * outputSize
+	numBias := outputSize
+	numParams := numWeight + numBias
+
+	l := &FullyConnectedLayer{
+		layerIndex: index,
+		to:         to,
+		InputSize:  inputSize,
+		OutputSize: outputSize,
+		// parameters: to.Create([]int{numParams}),
+		gradients:  to.Create([]int{numParams}),
+	}
+
+	// fmt.Printf("[SaveNewFullyConnectedLayer] parameters: 0x%x, gradients: 0x%x\n", l.parameters, l.gradients)
+
+	// l.weights = to.Slice(l.parameters, 0, numWeight)
+	// l.bias = to.Slice(l.parameters, numWeight, numParams)
+	l.weightGradients = to.Slice(l.gradients, 0, numWeight)
+	l.biasGradients = to.Slice(l.gradients, numWeight, numParams)
+
+	return l
+}
+
 // LazyRandomize lazily initialize the parameters of the layer randomly.
 func (l *FullyConnectedLayer) LazyRandomize() {
+	fmt.Printf("FullyConnectedLayer.LazyRandomize\n")
+	
 	numWeight := l.InputSize * l.OutputSize
+	
 	weights := make([]float64, numWeight)
 	for i := 0; i < numWeight; i++ {
 		weights[i] = (rand.Float64() - 0.5) / float64(l.InputSize) * 2
 	}
-	l.to.LazyInit(l.weights, weights)
-
+	
 	numBias := l.OutputSize
 	bias := make([]float64, numBias)
 	for i := 0; i < numBias; i++ {
 		bias[i] = rand.Float64()*2 - 1
 	}
-	l.to.LazyInit(l.bias, bias)
+
+	numParams := numWeight + numBias
+	datas := [][]float64{weights, bias}
+	nums := []int{numWeight, numParams}
+	
+	slices := l.to.LazyInitSlices(datas, nums, numParams)
+	l.parameters = slices[0]
+	l.weights = slices[1]
+	l.bias = slices[2]
 }

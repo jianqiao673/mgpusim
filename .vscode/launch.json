@@ -425,7 +425,7 @@
             "args": [
                 "-timing",
                 // "-no-progress-bar",
-                // "-save-memory",
+                "-save-memory",
             ]
         },
         {

@@ -15,7 +15,7 @@ func main() {
 
 	runner := new(runner.Runner).Init()
 
-	benchmark := xor.NewBenchmark(runner.Driver())
+	benchmark := xor.NewBenchmark(runner.Driver(), runner.SaveMemory)
 
 	runner.AddBenchmark(benchmark)
 

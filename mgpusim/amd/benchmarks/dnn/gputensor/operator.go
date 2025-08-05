@@ -1664,6 +1664,20 @@ func (o *GPUOperator) PureCreate(size []int) tensor.Tensor {
 	return t
 }
 
+// PureCreate creates a new GPU tensor without allocating memory.
+func (o *GPUOperator) LazyPureCreate(size []int, ptr driver.Ptr) tensor.Tensor {
+	t := &Tensor{
+		driver: o.driver,
+		ctx:    o.ctx,
+		size:   size,
+		ptr: 	ptr,
+	}
+
+	fmt.Printf("[LazyPureCreate Tersor] vAddr: 0x%x, byteSize: %d\n", t.ptr, size)
+
+	return t
+}
+
 // LazyCreateWithData creates the tensor and 
 // lazily copies the given data to the GPU memory.
 func (o *GPUOperator) LazyCreateWithData(
@@ -1712,6 +1726,38 @@ func (o *GPUOperator) LazyInit(t tensor.Tensor, data []float64) {
 
 	o.driver.LazyMemCopyH2D(o.ctx, f32Data, uint64(t.NumElement()*sizeOfFloat32))
 	t.(*Tensor).ptr = o.driver.AllocatedVAddr
+}
+
+// LazyInit sets the data of the tensor, and allocates memory just before memory copy.
+func (o *GPUOperator) LazyInitSlices(datas [][]float64, nums []int, allocateNum int) []tensor.Tensor {
+	if len(datas) != len(nums) {
+        panic("number of datas slices and nums must match")
+    }
+
+	queue := o.driver.CreateCommandQueue(o.ctx)
+	var slice0 tensor.Tensor
+	var slices []tensor.Tensor
+
+	for i := range datas {
+		data := datas[i]
+		num := nums[i]
+
+		f32Data := f64SliceToF32Slice(data)
+		if i == 0 {
+			o.driver.LazyEnqueueMemCopyH2D(queue, f32Data, uint64(allocateNum))
+			o.driver.DrainCommandQueue(queue)
+			slice0 = o.LazyPureCreate([]int{allocateNum}, o.driver.AllocatedVAddr)
+			slices = append(slices, slice0)
+
+			slice := o.Slice(slice0, 0, num)
+			slices = append(slices, slice)
+		} else {
+			slice := o.Slice(slice0, nums[i-1], num)
+			o.driver.MemCopyH2D(o.ctx, slice.(*Tensor).ptr, f32Data)
+			slices = append(slices, slice)
+		}
+	}
+	return slices
 }
 
 // ReluForward Implementation

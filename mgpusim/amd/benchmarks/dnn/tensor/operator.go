@@ -61,6 +61,7 @@ type Operator interface {
 
 	LazyCreateWithData(data []float64, size []int, descriptor string) Tensor
 	LazyInit(t Tensor, data []float64)
+	LazyInitSlices(datas [][]float64, nums []int, allocateNum int) []Tensor
 }
 
 // CPUOperator can process CPU tensors.
@@ -969,4 +970,10 @@ func (to CPUOperator) LazyCreateWithData(data []float64, size []int, descriptor 
 // LazyInit of the cpu operator does nothing.
 func (to CPUOperator) LazyInit(t Tensor, data []float64) {
 	// This function is intentionally left blank
+}
+
+// LazyInitSlices of the cpu operator does nothing.
+func (to CPUOperator) LazyInitSlices(datas [][]float64, nums []int, allocateNum int) []Tensor {
+	// This function is intentionally left blank
+	return nil
 }

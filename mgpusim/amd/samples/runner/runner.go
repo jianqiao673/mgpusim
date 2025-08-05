@@ -56,6 +56,10 @@ func (r *Runner) Init() *Runner {
 	}
 
 	r.createUnifiedGPUs()
+	
+	if r.SaveMemory {
+		r.setMemorySaving()
+	}
 
 	return r
 }
@@ -126,10 +130,6 @@ func (r *Runner) AddBenchmark(b benchmarks.Benchmark) {
 		b.SetUnifiedMemory()
 	}
 
-	if r.SaveMemory {
-		b.SetMemorySaving()
-	}
-
 	r.benchmarks = append(r.benchmarks, b)
 }
 
@@ -183,4 +183,9 @@ func (r *Runner) Driver() *driver.Driver {
 // Engine returns the event-driven simulation engine used by the current runner.
 func (r *Runner) Engine() sim.Engine {
 	return r.simulation.GetEngine()
+}
+
+// SetMemorySaving sets the memory saving mode
+func (r *Runner) setMemorySaving() {
+	r.SaveMemory = true
 }

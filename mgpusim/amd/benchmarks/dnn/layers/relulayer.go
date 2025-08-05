@@ -55,5 +55,5 @@ func (r *ReluLayer) SaveForward(
 	input tensor.Tensor,
 ) tensor.Tensor {
 	r.forwardInput = r.to.Clone(input)
-	return r.to.ReluForward(input)
+	return r.to.SaveReluForward(input)
 }

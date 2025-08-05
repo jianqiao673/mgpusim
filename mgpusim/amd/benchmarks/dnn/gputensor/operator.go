@@ -1831,38 +1831,6 @@ func (o *GPUOperator) SaveTranspose(t tensor.Tensor, order []int) tensor.Tensor 
 	return output
 }
 
-// ReluForward Implementation
-func (o *GPUOperator) LazyReluForward(
-	in tensor.Tensor,
-) tensor.Tensor {
-	log.Printf("GPUOperator ReluForward")
-
-	out := o.Create(in.Size()).(*Tensor)
-	out.descriptor = in.Descriptor()
-
-	args := reluForwardKernelArgs{
-		In:    in.(*Tensor).ptr,
-		Out:   out.ptr,
-		Count: int32(in.NumElement()),
-	}
-
-	o.timerStart()
-	o.driver.LaunchKernel(o.ctx, o.reluForwardKernel,
-		[3]uint32{uint32(in.NumElement()), 1, 1},
-		[3]uint16{64, 1, 1},
-		&args)
-	o.timerEnd("ReluForward")
-
-	if o.verification {
-		cpuIn := o.gpuTensorToCPUTensor(in)
-		cpuOut := o.cpuOperator.ReluForward(cpuIn)
-		o.tensorMustMatch(cpuOut, out)
-		fmt.Println("ReluForward verified.")
-	}
-
-	return out
-}
-
 // ElementWiseMul calculates the element multiplication of A and B.
 func (o *GPUOperator) LazyElementWiseMul(
 	a, b tensor.Tensor,
@@ -1981,4 +1949,88 @@ func (o *GPUOperator) saveMatrixMultiplication(
 	o.timerEnd("Gemm")
 
 	return d
+}
+
+// SaveReluForward Implementation
+func (o *GPUOperator) SaveReluForward(
+	in tensor.Tensor,
+) tensor.Tensor {
+	log.Printf("GPUOperator SaveReluForward")
+
+	// out := o.Create(in.Size()).(*Tensor)
+	out := o.LazyPureCreate(in.Size(), in.(*Tensor).ptr).(*Tensor) // out.ptr = in.ptr
+	out.descriptor = in.Descriptor()
+
+	args := reluForwardKernelArgs{
+		In:    in.(*Tensor).ptr,
+		Out:   out.ptr,
+		Count: int32(in.NumElement()),
+	}
+
+	o.timerStart()
+	o.driver.LazyLaunchKernel(o.ctx, o.reluForwardKernel,
+		[3]uint32{uint32(in.NumElement()), 1, 1},
+		[3]uint16{64, 1, 1},
+		&args)
+	o.timerEnd("ReluForward")
+
+	if o.verification {
+		cpuIn := o.gpuTensorToCPUTensor(in)
+		cpuOut := o.cpuOperator.ReluForward(cpuIn)
+		o.tensorMustMatch(cpuOut, out)
+		fmt.Println("ReluForward verified.")
+	}
+
+	return out
+}
+
+// Softmax performs the softmax operation.
+func (o *GPUOperator) SaveSoftmax(t tensor.Tensor) tensor.Tensor {
+	o.mustBeTwoDimension(t)
+
+	input := t.(*Tensor)
+	output := o.Create(input.size).(*Tensor)
+	expInput := o.Create(
+		[]int{input.size[0], t.NumElement() / input.size[0]},
+	).(*Tensor)
+	defer o.Free(expInput)
+
+	expArgs := softmaxExpKernelArg{
+		Input:  input.ptr,
+		Output: expInput.ptr,
+		N:      int32(input.NumElement()),
+	}
+	o.driver.LazyLaunchKernel(o.ctx, o.softmaxExpKernel,
+		[3]uint32{uint32(input.NumElement()), 1, 1},
+		[3]uint16{64, 1, 1},
+		&expArgs,
+	)
+
+	denominator := o.Sum(expInput, []int{1})
+
+	divArgs := softmaxDivKernelArg{
+		ExpInput:    expInput.ptr,
+		Output:      output.ptr,
+		Denominator: denominator.(*Tensor).ptr,
+		NumElement:  int32(expInput.NumElement()),
+		BatchSize:   int32(t.Size()[0]),
+	}
+
+	o.timerStart()
+	o.driver.LazyLaunchKernel(o.ctx, o.softmaxDivKernel,
+		[3]uint32{uint32(expInput.NumElement()), 1, 1},
+		[3]uint16{64, 1, 1},
+		&divArgs,
+	)
+	o.timerEnd("Softmax")
+
+	if o.verification {
+		cpuIn := o.gpuTensorToCPUTensor(t)
+		cpuOut := o.cpuOperator.Softmax(cpuIn)
+
+		o.tensorMustMatch(cpuOut, output)
+		fmt.Println("Softmax verified.")
+	}
+
+	return output
 }

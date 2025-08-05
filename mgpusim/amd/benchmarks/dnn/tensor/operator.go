@@ -63,6 +63,7 @@ type Operator interface {
 	LazyInit(t Tensor, data []float64)
 	LazyInitSlices(datas [][]float64, nums []int, allocateNum int) []Tensor
 	SaveGemm(transA, transB bool, alpha, beta float64, a, b, c Tensor) Tensor
+	SaveReluForward(in Tensor) Tensor
 }
 
 // CPUOperator can process CPU tensors.
@@ -985,3 +986,8 @@ func (to CPUOperator) SaveGemm(transA, transB bool, alpha, beta float64, a, b, c
 	return nil
 }
 
+// SaveReluForward of the cpu operator does nothing.
+func (to CPUOperator) SaveReluForward(in Tensor) Tensor {
+	// This function is intentionally left blank
+	return nil
+}

@@ -2249,3 +2249,84 @@ func (o *GPUOperator) LazyReluBackward(
 
 	return out
 }
+
+// LazyElementWiseMul lazily calculates the element multiplication of A and B.
+func (o *GPUOperator) LazyElementWiseMul(
+	a, b tensor.Tensor,
+) tensor.Tensor {
+	if a.NumElement() != b.NumElement() {
+		panic("size not match")
+	}
+
+	out := o.Create(a.Size()).(*Tensor)
+	args := elemWiseMulKernArg{
+		Out: out.ptr,
+		In1: a.(*Tensor).ptr,
+		In2: b.(*Tensor).ptr,
+		N:   int32(a.NumElement()),
+	}
+
+	o.timerStart()
+	o.driver.LazyLaunchKernel(o.ctx, o.elemWiseMulKernel,
+		[3]uint32{uint32(a.NumElement()), 1, 1},
+		[3]uint16{64, 1, 1},
+		&args,
+	)
+	o.timerEnd("ElementWiseMul")
+
+	if o.verification {
+		cpuA := o.gpuTensorToCPUTensor(a)
+		cpuB := o.gpuTensorToCPUTensor(a)
+		cpuOut := o.cpuOperator.ElementWiseMul(cpuA, cpuB)
+		o.tensorMustMatch(cpuOut, out)
+		fmt.Println("ElementWiseMul verified.")
+	}
+
+	return out
+}
+
+// Adam uses the Adam algorithm to update the parameters
+func (o *GPUOperator) LazyAdam(
+	params, gradient, vHistory, sHistory tensor.Tensor,
+	smoothFactor1, smoothFactor2, learningRate float64,
+) {
+	if params.NumElement() != gradient.NumElement() ||
+		params.NumElement() != sHistory.NumElement() ||
+		params.NumElement() != vHistory.NumElement() {
+		panic("size mismatch")
+	}
+
+	var cpuParams, cpuGradient, cpuSHistory, cpuVHistory *tensor.SimpleTensor
+	if o.verification {
+		cpuParams = o.gpuTensorToCPUTensor(params)
+		cpuGradient = o.gpuTensorToCPUTensor(gradient)
+		cpuSHistory = o.gpuTensorToCPUTensor(sHistory)
+		cpuVHistory = o.gpuTensorToCPUTensor(vHistory)
+	}
+
+	args := adamKernArg{
+		Params:        params.(*Tensor).ptr,
+		Gradients:     gradient.(*Tensor).ptr,
+		SHistory:      sHistory.(*Tensor).ptr,
+		VHistory:      vHistory.(*Tensor).ptr,
+		SmoothFactor1: float32(smoothFactor1),
+		SmoothFactor2: float32(smoothFactor2),
+		LearningRate:  float32(learningRate),
+		N:             int32(params.NumElement()),
+	}
+
+	o.timerStart()
+	o.driver.LazyLaunchKernel(o.ctx, o.adamKernel,
+		[3]uint32{uint32(params.NumElement()), 1, 1},
+		[3]uint16{64, 1, 1},
+		&args)
+	o.timerEnd("Adam")
+
+	if o.verification {
+		o.cpuOperator.Adam(cpuParams, cpuGradient, cpuVHistory, cpuSHistory, smoothFactor1, smoothFactor2, learningRate)
+
+		o.tensorMustMatch(cpuVHistory, vHistory)
+		o.tensorMustMatch(cpuSHistory, sHistory)
+		o.tensorMustMatch(cpuParams, params)
+	}
+}

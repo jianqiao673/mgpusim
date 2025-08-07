@@ -56,30 +56,30 @@ func (r *Adam) UpdateParameters(layer Layer) {
 		r.SmoothFactor1, r.SmoothFactor2, r.LearningRate)
 }
 
-// UpdateParameters update the layer parameters using the Adam algorithm.
-// func (r *Adam) LazyUpdateParameters(layer Layer) {
-// 	params := layer.Parameters()
-// 	gradients := layer.Gradients()
+// LazyUpdateParameters lazily update the layer parameters using the Adam algorithm.
+func (r *Adam) LazyUpdateParameters(layer Layer) {
+	params := layer.Parameters()
+	gradients := layer.Gradients()
 
-// 	if params == nil || gradients == nil {
-// 		return
-// 	}
+	if params == nil || gradients == nil {
+		return
+	}
 
-// 	v := r.historyV[layer]
-// 	s, found := r.historyS[layer]
+	v := r.historyV[layer]
+	s, found := r.historyS[layer]
 
-// 	if !found {
-// 		v = r.to.LazyClone(gradients)
-// 		r.historyV[layer] = v
+	if !found {
+		v = r.to.LazyClone(gradients)
+		r.historyV[layer] = v
 
-// 		s = r.to.LazyClone(gradients)
-// 		sSquare := r.to.ElementWiseMul(s, s)
-// 		r.to.Free(s)
+		s = r.to.LazyClone(gradients)
+		sSquare := r.to.LazyElementWiseMul(s, s)
+		r.to.Free(s)
 
-// 		s = sSquare
-// 		r.historyS[layer] = s
-// 	}
+		s = sSquare
+		r.historyS[layer] = s
+	}
 
-// 	r.to.Adam(params, gradients, v, s,
-// 		r.SmoothFactor1, r.SmoothFactor2, r.LearningRate)
-// }
+	r.to.LazyAdam(params, gradients, v, s,
+		r.SmoothFactor1, r.SmoothFactor2, r.LearningRate)
+}

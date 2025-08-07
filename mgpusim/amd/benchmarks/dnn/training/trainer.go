@@ -166,7 +166,7 @@ func (t Trainer) SaveTrain() {
 			output := t.saveForward(data)
 			derivative := t.saveCalculateLoss(output, label)
 			t.saveBackward(derivative)
-			t.updateParameters()
+			t.lazyUpdateParameters()
 			batchNum++
 		}
 
@@ -213,5 +213,16 @@ func (t Trainer) saveBackward(derivative tensor.Tensor) {
 	for i := len(t.Network.Layers) - 1; i >= 0; i-- {
 		input := output
 		output = t.Network.Layers[i].SaveBackward(input)
+	}
+}
+
+func (t Trainer) lazyUpdateParameters() {
+	//log.Printf("Update Parameters.\n")
+	for _, l := range t.Network.Layers {
+		t.OptimizationAlg.LazyUpdateParameters(l)
+		// if l.Gradients() != nil {
+		// 	fmt.Println("\n\nLayer ", i, "\nGradient", t.TO.Dump(l.Gradients()),
+		// 		"\nParams", t.TO.Dump(l.Parameters()))
+		// }
 	}
 }

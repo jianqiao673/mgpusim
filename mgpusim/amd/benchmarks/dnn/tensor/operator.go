@@ -72,6 +72,11 @@ type Operator interface {
 	LazySoftmaxCrossEntropyDerivative(t Tensor, label []int) Tensor
 	LazyZeros(size []int) Tensor
 	LazyReluBackward(forwardIn, backIn Tensor) Tensor
+	LazyElementWiseMul(a, b Tensor) Tensor
+	LazyAdam(
+		params, gradient, vHistory, sHistory Tensor,
+		smoothFactor1, smoothFactor2, learningRate float64,
+	)
 }
 
 // CPUOperator can process CPU tensors.
@@ -1045,4 +1050,18 @@ func (to CPUOperator) LazySoftmaxCrossEntropyDerivative(t Tensor, label []int) T
 func (to CPUOperator) LazyReluBackward(forwardIn, backIn Tensor) Tensor {
 	// This function is intentionally left blank
 	return nil
+}
+
+// LazyAdam of the cpu operator does nothing.
+func (to CPUOperator) LazyElementWiseMul(a, b Tensor) Tensor {
+	// This function is intentionally left blank
+	return nil	
+}
+
+// LazyAdam of the cpu operator does nothing.
+func (to CPUOperator) LazyAdam(
+	params, gradient, vHistory, sHistory Tensor,
+	smoothFactor1, smoothFactor2, learningRate float64,
+) {
+	// This function is intentionally left blank
 }

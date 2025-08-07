@@ -1702,7 +1702,21 @@ func (o *GPUOperator) LazyCreateWithData(
 	return t
 }
 
-// Clone duplicates the input tensor.
+// LazyCopy lazily copies data from one tensor to another tensor. The src and dst tensor
+// must have the same number of elements.
+func (o *GPUOperator) LazyCopy(dst tensor.Tensor, src tensor.Tensor) {
+	d := dst.(*Tensor)
+	s := src.(*Tensor)
+
+	if d.NumElement() != s.NumElement() {
+		panic(fmt.Sprintf("mismatch in size src size %v dst size %v",
+			src.Size(), dst.Size()))
+	}
+
+	o.driver.LazyMemCopyD2D(o.ctx, d.ptr, s.ptr, dst.NumElement()*sizeOfFloat32)
+}
+
+// LazyClone lazily duplicates the input tensor.
 func (o *GPUOperator) LazyClone(t tensor.Tensor) tensor.Tensor {
 	inT := t.(*Tensor)
 	outT := o.Create(t.Size()).(*Tensor)
@@ -1710,13 +1724,13 @@ func (o *GPUOperator) LazyClone(t tensor.Tensor) tensor.Tensor {
 	outT.size = make([]int, len(inT.size))
 	copy(outT.size, inT.size)
 
-	o.Copy(outT, inT)
+	o.LazyCopy(outT, inT)
 
 	return outT
 }
 
-// LazyInit sets the data of the tensor, and allocates memory just before memory copy.
-func (o *GPUOperator) LazyInit(t tensor.Tensor, data []float64) {
+// lazyInit lazily sets the data of the tensor, and allocates memory just before memory copy.
+func (o *GPUOperator) lazyInit(t tensor.Tensor, data []float64) {
 	if t.NumElement() != len(data) {
 		panic("mismatch in buffer shape")
 	}
@@ -1727,7 +1741,7 @@ func (o *GPUOperator) LazyInit(t tensor.Tensor, data []float64) {
 	t.(*Tensor).ptr = o.driver.AllocatedVAddr
 }
 
-// LazyInit sets the data of the tensor, and allocates memory just before memory copy.
+// LazyInitSlices lazily sets the data of the tensor slices, and allocates memory just before memory copy.
 func (o *GPUOperator) LazyInitSlices(datas [][]float64, nums []int, allocateNum int) []tensor.Tensor {
 	if len(datas) != len(nums) {
         panic("number of datas slices and nums must match")
@@ -1759,8 +1773,65 @@ func (o *GPUOperator) LazyInitSlices(datas [][]float64, nums []int, allocateNum 
 	return slices
 }
 
+// LazyRepeat will lazily create another tensor that duplicates the input tensor by n
+// times.
+func (o *GPUOperator) LazyRepeat(t tensor.Tensor, times int) tensor.Tensor {
+	numElem := t.NumElement()
+	out := o.Create([]int{numElem * times}).(*Tensor)
+
+	outLength := times * t.NumElement()
+	args := repeatArgs{
+		Output:       out.ptr,
+		Input:        t.(*Tensor).ptr,
+		InputLength:  uint32(t.NumElement()),
+		OutputLength: uint32(outLength),
+	}
+
+	o.driver.LazyLaunchKernel(o.ctx, o.repeatKernel,
+		[3]uint32{uint32(outLength), 1, 1},
+		[3]uint16{64, 1, 1},
+		&args,
+	)
+
+	if o.verification {
+		cpuIn := o.gpuTensorToCPUTensor(t)
+		cpuOut := o.cpuOperator.Repeat(cpuIn, times)
+		o.tensorMustMatch(cpuOut, out)
+		fmt.Println("Repeat verified.")
+	}
+
+	return out
+}
+
+// lazyClear sets the content of the tensor to 0
+// and lazily allocates memory after memory copy.
+func (o *GPUOperator) lazyClear(t tensor.Tensor) {
+	data := make([]float64, t.NumElement())
+
+	o.lazyInit(t, data)
+}
+
+// Reshape creates another tensor with the same elements but a different size.
+func (o *GPUOperator) LazyReshape(t tensor.Tensor, newSize []int) tensor.Tensor {
+	out := o.LazyClone(t)
+
+	out.SetSize(newSize)
+
+	return out
+}
+
+// LazyZeros creates a tensor prefilled with zeros
+// and lazily allocates memory after memory copy.
+func (o *GPUOperator) LazyZeros(size []int) tensor.Tensor {
+	t := o.PureCreate(size)
+
+	o.lazyClear(t)
+
+	return t
+}
+
 // Transpose reorders the axises of the tensor.
-func (o *GPUOperator) SaveTranspose(t tensor.Tensor, order []int) tensor.Tensor {
+func (o *GPUOperator) LazyTranspose(t tensor.Tensor, order []int) tensor.Tensor {
 	input := t.(*Tensor)
 	if len(order) != len(input.Size()) {
 		panic("order should include all axes")
@@ -1778,8 +1849,8 @@ func (o *GPUOperator) SaveTranspose(t tensor.Tensor, order []int) tensor.Tensor 
 		outSize[i] = t.Size()[order[i]]
 	}
 
-	// output := o.Create(outSize).(*Tensor)
-	output := o.LazyPureCreate(outSize, t.(*Tensor).ptr).(*Tensor) // output.ptr = input.ptr
+	output := o.Create(outSize).(*Tensor)
+	// output := o.LazyPureCreate(outSize, t.(*Tensor).ptr).(*Tensor) // output.ptr = input.ptr
 
 	// dOrder := o.driver.AllocateMemory(o.ctx, uint64(dim*sizeOfInt32))
 	o.driver.LazyMemCopyH2D(o.ctx, hOrder, uint64(dim*sizeOfInt32))
@@ -1800,10 +1871,10 @@ func (o *GPUOperator) SaveTranspose(t tensor.Tensor, order []int) tensor.Tensor 
 		uint64(t.NumElement()*dim*sizeOfInt32))
 	defer o.driver.FreeMemory(o.ctx, dInIndexBuf)
 
-	dOutIndexBuf := dInIndexBuf
-	// dOutIndexBuf := o.driver.AllocateMemory(o.ctx,
-	// 	uint64(t.NumElement()*dim*sizeOfInt32))
-	// defer o.driver.FreeMemory(o.ctx, dOutIndexBuf)
+	// dOutIndexBuf := dInIndexBuf
+	dOutIndexBuf := o.driver.AllocateMemory(o.ctx,
+		uint64(t.NumElement()*dim*sizeOfInt32))
+	defer o.driver.FreeMemory(o.ctx, dOutIndexBuf)
 
 	args := transposeKernelArgs{
 		In:          t.(*Tensor).ptr,
@@ -1831,7 +1902,8 @@ func (o *GPUOperator) SaveTranspose(t tensor.Tensor, order []int) tensor.Tensor 
 	return output
 }
 
-// Sum reduces the number of axes by summing the numbers on given axes.
+// LazySum reduces the number of axes by summing the numbers on given axes
+// in a memory saving way.
 func (o *GPUOperator) LazySum(t tensor.Tensor, axis []int) tensor.Tensor {
 	fmt.Printf("LazySum\n")
 
@@ -1938,12 +2010,12 @@ func (o *GPUOperator) SaveGemm(
 ) tensor.Tensor {
 	tempA := a
 	if transA {
-		tempA = o.SaveTranspose(a, []int{1, 0})
+		tempA = o.LazyTranspose(a, []int{1, 0})
 	}
 
 	tempB := b
 	if transB {
-		tempB = o.SaveTranspose(b, []int{1, 0})
+		tempB = o.LazyTranspose(b, []int{1, 0})
 	}
 
 	d := o.lazyMatrixMultiplication(alpha, beta, tempA, tempB, c)
@@ -2146,4 +2218,34 @@ func (o *GPUOperator) LazySoftmaxCrossEntropyDerivative(
 	}
 
 	return output
+}
+
+// ReluBackward Implementation
+func (o *GPUOperator) LazyReluBackward(
+	forwardIn, backIn tensor.Tensor,
+) tensor.Tensor {
+	out := o.Create(forwardIn.Size()).(*Tensor)
+	args := reluBackwardKernelArgs{
+		In:     forwardIn.(*Tensor).ptr,
+		Backin: backIn.(*Tensor).ptr,
+		Out:    out.ptr,
+		Count:  int32(forwardIn.NumElement()),
+	}
+
+	o.timerStart()
+	o.driver.LazyLaunchKernel(o.ctx, o.reluBackwardKernel,
+		[3]uint32{uint32(forwardIn.NumElement()), 1, 1},
+		[3]uint16{64, 1, 1},
+		&args)
+	o.timerEnd("ReluBackward")
+
+	if o.verification {
+		cpuForwardIn := o.gpuTensorToCPUTensor(forwardIn)
+		cpuBackIn := o.gpuTensorToCPUTensor(backIn)
+		cpuOut := o.cpuOperator.ReluBackward(cpuForwardIn, cpuBackIn)
+		o.tensorMustMatch(cpuOut, out)
+		fmt.Println("ReluBackward verified.")
+	}
+
+	return out
 }

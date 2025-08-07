@@ -165,7 +165,7 @@ func (t Trainer) SaveTrain() {
 
 			output := t.saveForward(data)
 			derivative := t.saveCalculateLoss(output, label)
-			t.backward(derivative)
+			t.saveBackward(derivative)
 			t.updateParameters()
 			batchNum++
 		}
@@ -204,4 +204,14 @@ func (t Trainer) saveCalculateLoss(
 	}
 
 	return derivative
+}
+
+func (t Trainer) saveBackward(derivative tensor.Tensor) {
+	//log.Printf("saveBackward.\n")
+	var output tensor.Tensor
+	output = derivative
+	for i := len(t.Network.Layers) - 1; i >= 0; i-- {
+		input := output
+		output = t.Network.Layers[i].SaveBackward(input)
+	}
 }

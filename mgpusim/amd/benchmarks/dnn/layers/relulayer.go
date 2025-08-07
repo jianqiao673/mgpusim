@@ -50,10 +50,19 @@ func (r *ReluLayer) LazyRandomize() {
 	// This function is intentionally left blank
 }
 
-// [TODO] Forward calculates the forward propagation results.
+// SaveForward calculates the forward propagation results
+// in a memory saving way.
 func (r *ReluLayer) SaveForward(
 	input tensor.Tensor,
 ) tensor.Tensor {
-	r.forwardInput = r.to.Clone(input)
+	r.forwardInput = r.to.LazyClone(input)
 	return r.to.SaveReluForward(input)
+}
+
+// SaveBackward calculates the input gradients
+// in a memory saving way.
+func (r *ReluLayer) SaveBackward(input tensor.Tensor) tensor.Tensor {
+	out := r.to.LazyReluBackward(r.forwardInput, input)
+	r.to.Free(r.forwardInput)
+	return out
 }

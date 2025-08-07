@@ -235,12 +235,12 @@ func (l *FullyConnectedLayer) LazyRandomize() {
 func (l *FullyConnectedLayer) SaveForward(
 	input tensor.Tensor,
 ) tensor.Tensor {
-	l.forwardInput = l.to.Clone(input)
+	l.forwardInput = l.to.LazyClone(input)
 
-	in := l.to.Reshape(input, []int{input.Size()[0], l.InputSize})
-	weightMat := l.to.Reshape(l.weights, []int{l.InputSize, l.OutputSize})
-	biasMat := l.to.Repeat(l.bias, input.Size()[0])
-	biasMatReshape := l.to.Reshape(biasMat,
+	in := l.to.LazyReshape(input, []int{input.Size()[0], l.InputSize})
+	weightMat := l.to.LazyReshape(l.weights, []int{l.InputSize, l.OutputSize})
+	biasMat := l.to.LazyRepeat(l.bias, input.Size()[0])
+	biasMatReshape := l.to.LazyReshape(biasMat,
 		[]int{input.Size()[0], l.OutputSize})
 
 	out := l.to.SaveGemm(false, false, 1, 1, in, weightMat, biasMatReshape)
@@ -252,6 +252,73 @@ func (l *FullyConnectedLayer) SaveForward(
 	// 	biasMat, biasMatReshape)
 	// l.to.Free(biasMat) // if free, then page not found
 	// l.to.Free(biasMatReshape) // if free, then value mismatch
+
+	return out
+}
+
+// Backward calculate the weight, bias, and input gradients.
+func (l *FullyConnectedLayer) SaveBackward(
+	input tensor.Tensor,
+) tensor.Tensor {
+	l.to.Clear(l.gradients)
+
+	l.saveCalculateWeightGradients(input)
+	l.lazyCalculateBiasGradients(input)
+	var output tensor.Tensor
+
+	if l.layerIndex > 0 {
+		output = l.saveCalculateInputGradients(input)
+	}
+
+	l.to.Free(l.forwardInput)
+
+	return output
+}
+
+func (l *FullyConnectedLayer) saveCalculateWeightGradients(
+	input tensor.Tensor,
+) {
+	forwardInMatrix := l.to.LazyReshape(l.forwardInput,
+		[]int{l.forwardInput.Size()[0], l.InputSize})
+	backwardInMatrix := l.to.LazyReshape(input,
+		[]int{input.Size()[0], l.OutputSize})
+	zeroMatrix := l.to.LazyZeros([]int{l.InputSize, l.OutputSize})
+
+	g := l.to.SaveGemm(
+		true, false,
+		1, 1,
+		forwardInMatrix, backwardInMatrix,
+		zeroMatrix,
+	)
+
+	l.to.LazyCopy(l.weightGradients, g)
+
+	l.to.Free(forwardInMatrix)
+	l.to.Free(backwardInMatrix)
+	l.to.Free(zeroMatrix)
+	l.to.Free(g)
+}
+
+func (l *FullyConnectedLayer) lazyCalculateBiasGradients(
+	input tensor.Tensor,
+) {
+	g := l.to.LazySum(input, []int{0})
+	l.to.LazyCopy(l.biasGradients, g)
+	l.to.Free(g)
+}
+
+func (l *FullyConnectedLayer) saveCalculateInputGradients(
+	input tensor.Tensor,
+) tensor.Tensor {
+	weightMatrix := l.to.LazyReshape(l.weights, []int{l.InputSize, l.OutputSize})
+	inputMatrix := l.to.LazyReshape(input, []int{input.Size()[0], l.OutputSize})
+	zeroMatrix := l.to.LazyZeros([]int{input.Size()[0], l.InputSize})
+
+	out := l.to.SaveGemm(false, true, 1, 1, inputMatrix, weightMatrix, zeroMatrix)
+
+	l.to.Free(weightMatrix)
+	l.to.Free(inputMatrix)
+	l.to.Free(zeroMatrix)
 
 	return out
 }

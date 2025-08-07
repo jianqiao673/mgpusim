@@ -60,12 +60,18 @@ type Operator interface {
 	ReluBackward(forwardIn, backwardIn Tensor) Tensor
 
 	LazyCreateWithData(data []float64, size []int, descriptor string) Tensor
-	LazyInit(t Tensor, data []float64)
 	LazyInitSlices(datas [][]float64, nums []int, allocateNum int) []Tensor
+	LazyClone(t Tensor) Tensor
+	LazyRepeat(t Tensor, times int) Tensor
+	LazyCopy(dst Tensor, src Tensor)
+	LazyReshape(t Tensor, newSize []int) Tensor
+	LazySum(t Tensor, axis []int) Tensor
 	SaveGemm(transA, transB bool, alpha, beta float64, a, b, c Tensor) Tensor
 	SaveReluForward(in Tensor) Tensor
 	LazySoftmax(t Tensor) Tensor
 	LazySoftmaxCrossEntropyDerivative(t Tensor, label []int) Tensor
+	LazyZeros(size []int) Tensor
+	LazyReluBackward(forwardIn, backIn Tensor) Tensor
 }
 
 // CPUOperator can process CPU tensors.
@@ -971,15 +977,44 @@ func (to CPUOperator) LazyCreateWithData(data []float64, size []int, descriptor 
 	return nil
 }
 
-// LazyInit of the cpu operator does nothing.
-func (to CPUOperator) LazyInit(t Tensor, data []float64) {
-	// This function is intentionally left blank
-}
-
 // LazyInitSlices of the cpu operator does nothing.
 func (to CPUOperator) LazyInitSlices(datas [][]float64, nums []int, allocateNum int) []Tensor {
 	// This function is intentionally left blank
 	return nil
+}
+
+// LazyClone of the cpu operator does nothing.
+func (to CPUOperator) LazyClone(t Tensor) Tensor {
+	// This function is intentionally left blank
+	return nil
+}
+
+func (to CPUOperator) LazyRepeat(t Tensor, times int) Tensor {
+	// This function is intentionally left blank
+	return nil
+}
+
+// LazyInitSlices of the cpu operator does nothing.
+func (to CPUOperator) LazyCopy(dst Tensor, src Tensor) {
+	// This function is intentionally left blank
+}
+
+// LazyReshape of the cpu operator does nothing.
+func (to CPUOperator) LazyReshape(t Tensor, newSize []int) Tensor {
+	// This function is intentionally left blank
+	return nil	
+}
+
+// LazyZeros of the cpu operator does nothing.
+func (to CPUOperator) LazyZeros(size []int) Tensor {
+	// This function is intentionally left blank
+	return nil	
+}
+
+// LazySum of the cpu operator does nothing.
+func (to CPUOperator) LazySum(t Tensor, axis []int) Tensor {
+	// This function is intentionally left blank
+	return nil	
 }
 
 // SaveGemm of the cpu operator does nothing.
@@ -997,11 +1032,17 @@ func (to CPUOperator) SaveReluForward(in Tensor) Tensor {
 // LazySoftmax of the cpu operator does nothing.
 func (to CPUOperator) LazySoftmax(t Tensor) Tensor {
 	// This function is intentionally left blank
-	return nil	
+	return nil
 }
 
 // LazySoftmaxCrossEntropyDerivative of the cpu operator does nothing.
 func (to CPUOperator) LazySoftmaxCrossEntropyDerivative(t Tensor, label []int) Tensor {
 	// This function is intentionally left blank
-	return nil	
+	return nil
+}
+
+// LazyReluBackward of the cpu operator does nothing.
+func (to CPUOperator) LazyReluBackward(forwardIn, backIn Tensor) Tensor {
+	// This function is intentionally left blank
+	return nil
 }

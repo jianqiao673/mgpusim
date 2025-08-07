@@ -425,3 +425,33 @@ func (d *Driver) AllocateMemory2(
 	log.Printf("[LazyAllocate] pid: %d, deviceid: %d, vAddr: 0x%x, pAddr: 0x%x, byteSize: %d\n", ctx.pid, ctx.currentGPUID, ptr, pAddr, byteSize)
 	return Ptr(ptr), pAddr
 }
+
+// LazyEnqueueMemCopyD2D lazily registers a MemCopyD2DCommand (LaunchKernelCommand) in the queue
+// and enmaps the memory allocation request for the command.
+func (d *Driver) LazyEnqueueMemCopyD2D(
+	queue *CommandQueue,
+	dst Ptr,
+	src Ptr,
+	num int,
+) {
+	co := kernels.LoadProgramFromMemory(
+		kernelBytes, "copyKernel")
+	if co == nil {
+		panic("fail to load copyKernel kernel")
+	}
+	gridSize := [3]uint32{uint32(math.Ceil(float64(num) / float64(4))), 1, 1}
+	//total_bytes / (wgSize * 4). Each thread copies 4 bytes.
+
+	wgSize := [3]uint16{64, 1, 1}
+	kernelArgs := KernelMemCopyArgs{src, dst, int64(num)}
+
+	d.LazyEnqueueLaunchKernel(queue, co, gridSize, wgSize, &kernelArgs)
+}
+
+// LazyMemCopyD2D lazily copies a memory from a GPU device to another GPU device. num is
+// the total number of bytes.
+func (d *Driver) LazyMemCopyD2D(ctx *Context, dst Ptr, src Ptr, num int) {
+	queue := d.CreateCommandQueue(ctx)
+	d.LazyEnqueueMemCopyD2D(queue, dst, src, num)
+	d.DrainCommandQueue(queue)
+}

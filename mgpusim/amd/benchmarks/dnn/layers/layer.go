@@ -24,4 +24,7 @@ type Layer interface {
 
 	// SaveForward performs forward propagation in a memory saving way. It stores the input.
 	SaveForward(input tensor.Tensor) tensor.Tensor
+	
+	// SaveBackward performs backward propagation in a memory saving way. It stores the gradient.
+	SaveBackward(input tensor.Tensor) tensor.Tensor
 }

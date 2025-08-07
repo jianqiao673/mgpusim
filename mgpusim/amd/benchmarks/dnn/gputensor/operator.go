@@ -1831,44 +1831,9 @@ func (o *GPUOperator) SaveTranspose(t tensor.Tensor, order []int) tensor.Tensor 
 	return output
 }
 
-// ElementWiseMul calculates the element multiplication of A and B.
-func (o *GPUOperator) LazyElementWiseMul(
-	a, b tensor.Tensor,
-) tensor.Tensor {
-	if a.NumElement() != b.NumElement() {
-		panic("size not match")
-	}
-
-	out := o.Create(a.Size()).(*Tensor)
-	args := elemWiseMulKernArg{
-		Out: out.ptr,
-		In1: a.(*Tensor).ptr,
-		In2: b.(*Tensor).ptr,
-		N:   int32(a.NumElement()),
-	}
-
-	o.timerStart()
-	o.driver.LaunchKernel(o.ctx, o.elemWiseMulKernel,
-		[3]uint32{uint32(a.NumElement()), 1, 1},
-		[3]uint16{64, 1, 1},
-		&args,
-	)
-	o.timerEnd("ElementWiseMul")
-
-	if o.verification {
-		cpuA := o.gpuTensorToCPUTensor(a)
-		cpuB := o.gpuTensorToCPUTensor(a)
-		cpuOut := o.cpuOperator.ElementWiseMul(cpuA, cpuB)
-		o.tensorMustMatch(cpuOut, out)
-		fmt.Println("ElementWiseMul verified.")
-	}
-
-	return out
-}
-
 // Sum reduces the number of axes by summing the numbers on given axes.
-func (o *GPUOperator) SaveSum(t tensor.Tensor, axis []int) tensor.Tensor {
-	fmt.Printf("SaveSum\n")
+func (o *GPUOperator) LazySum(t tensor.Tensor, axis []int) tensor.Tensor {
+	fmt.Printf("LazySum\n")
 
 	var in, out tensor.Tensor
 
@@ -1876,7 +1841,7 @@ func (o *GPUOperator) SaveSum(t tensor.Tensor, axis []int) tensor.Tensor {
 
 	in = t
 	for i, a := range axis {
-		out = o.saveSumOneAxis(in, a-i)
+		out = o.lazySumOneAxis(in, a-i)
 
 
 		if i > 0 {
@@ -1896,8 +1861,8 @@ func (o *GPUOperator) SaveSum(t tensor.Tensor, axis []int) tensor.Tensor {
 	return out
 }
 
-func (o *GPUOperator) saveSumOneAxis(t tensor.Tensor, axis int) tensor.Tensor {
-	fmt.Printf("saveSumOneAxis\n")
+func (o *GPUOperator) lazySumOneAxis(t tensor.Tensor, axis int) tensor.Tensor {
+	fmt.Printf("lazySumOneAxis\n")
 
 	outSize := make([]int, 0)
 	for i := range t.Size() {
@@ -1931,7 +1896,7 @@ func (o *GPUOperator) saveSumOneAxis(t tensor.Tensor, axis int) tensor.Tensor {
 	dOutSize := o.driver.AllocatedVAddr
 	defer o.driver.FreeMemory(o.ctx, dOutSize)
 
-	log.Printf("[saveSumOneAxis] dInSize: 0x%x, dOutSize: 0x%x\n",
+	log.Printf("[lazySumOneAxis] dInSize: 0x%x, dOutSize: 0x%x\n",
 		dInSize, dOutSize)
 
 	dInIndexBuf := o.driver.AllocateMemory(o.ctx,
@@ -1981,7 +1946,7 @@ func (o *GPUOperator) SaveGemm(
 		tempB = o.SaveTranspose(b, []int{1, 0})
 	}
 
-	d := o.saveMatrixMultiplication(alpha, beta, tempA, tempB, c)
+	d := o.lazyMatrixMultiplication(alpha, beta, tempA, tempB, c)
 
 	if transA {
 		o.Free(tempA)
@@ -2006,13 +1971,13 @@ func (o *GPUOperator) SaveGemm(
 	return d
 }
 
-// saveMatrixMultiplication performs the gemm operation
+// lazyMatrixMultiplication performs the gemm operation
 // in a memory saving way.
-func (o *GPUOperator) saveMatrixMultiplication(
+func (o *GPUOperator) lazyMatrixMultiplication(
 	alpha, beta float64,
 	a, b, c tensor.Tensor,
 ) tensor.Tensor {
-	fmt.Printf("saveMatrixMultiplication\n")
+	fmt.Printf("lazyMatrixMultiplication\n")
 
 	o.gemmDimMustBeValid(a, b, c)
 
@@ -2085,10 +2050,10 @@ func (o *GPUOperator) SaveReluForward(
 	return out
 }
 
-// SaveSoftmax performs the softmax operation
+// LazySoftmax performs the softmax operation
 // in a memory saving way.
-func (o *GPUOperator) SaveSoftmax(t tensor.Tensor) tensor.Tensor {
-	fmt.Printf("SaveSoftmax\n")
+func (o *GPUOperator) LazySoftmax(t tensor.Tensor) tensor.Tensor {
+	fmt.Printf("LazySoftmax\n")
 
 	o.mustBeTwoDimension(t)
 
@@ -2110,7 +2075,7 @@ func (o *GPUOperator) SaveSoftmax(t tensor.Tensor) tensor.Tensor {
 		&expArgs,
 	)
 
-	denominator := o.SaveSum(expInput, []int{1})
+	denominator := o.LazySum(expInput, []int{1})
 
 	divArgs := softmaxDivKernelArg{
 		ExpInput:    expInput.ptr,
@@ -2134,6 +2099,50 @@ func (o *GPUOperator) SaveSoftmax(t tensor.Tensor) tensor.Tensor {
 
 		o.tensorMustMatch(cpuOut, output)
 		fmt.Println("Softmax verified.")
+	}
+
+	return output
+}
+
+// LazySoftmaxCrossEntropyDerivative calculates the derivatives
+// using both softmax and cross entropy algorithms.
+// It calculates in a memory saving way.
+func (o *GPUOperator) LazySoftmaxCrossEntropyDerivative(
+	t tensor.Tensor,
+	label []int,
+) tensor.Tensor {
+	hLabel := make([]int32, len(label))
+	for i := 0; i < len(label); i++ {
+		hLabel[i] = int32(label[i])
+	}
+	// dLabel := o.driver.AllocateMemory(o.ctx, uint64(len(label)*4))
+	o.driver.LazyMemCopyH2D(o.ctx, hLabel, uint64(len(label)*4))
+	dLabel := o.driver.AllocatedVAddr
+	defer o.driver.FreeMemory(o.ctx, dLabel)
+
+	output := o.Create(t.Size()).(*Tensor)
+
+	args := crossEntropyDerivativeArgs{
+		Output:      output.ptr,
+		Input:       t.(*Tensor).ptr,
+		Label:       dLabel,
+		BatchSize:   int32(t.Size()[0]),
+		NumPerImage: int32(t.Size()[1]),
+	}
+
+	o.timerStart()
+	o.driver.LazyLaunchKernel(o.ctx, o.softmaxCrossEntropyDerivativeKernel,
+		[3]uint32{uint32(t.Size()[0] * t.Size()[1]), 1, 1},
+		[3]uint16{64, 1, 1},
+		&args,
+	)
+	o.timerEnd("SoftmaxCrossEntropyDerivative")
+
+	if o.verification {
+		cpuIn := o.gpuTensorToCPUTensor(t)
+		cpuOut := o.cpuOperator.SoftmaxCrossEntropyDerivative(cpuIn, label)
+		o.tensorMustMatch(cpuOut, output)
+		fmt.Println("SoftmaxCrossEntropyDerivative verified.")
 	}
 
 	return output

@@ -40,9 +40,9 @@ func (s SoftmaxCrossEntropy) SaveLoss(
 	loss float64,
 	derivative tensor.Tensor,
 ) {
-	softmax := s.to.SaveSoftmax(output)
+	softmax := s.to.LazySoftmax(output)
 	loss = s.to.CrossEntropy(softmax, label)
-	derivative = s.to.SoftmaxCrossEntropyDerivative(output, label)
+	derivative = s.to.LazySoftmaxCrossEntropyDerivative(output, label)
 
 	s.to.Free(softmax)
 

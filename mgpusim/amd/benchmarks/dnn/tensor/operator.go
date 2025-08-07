@@ -64,7 +64,8 @@ type Operator interface {
 	LazyInitSlices(datas [][]float64, nums []int, allocateNum int) []Tensor
 	SaveGemm(transA, transB bool, alpha, beta float64, a, b, c Tensor) Tensor
 	SaveReluForward(in Tensor) Tensor
-	SaveSoftmax(t Tensor) Tensor
+	LazySoftmax(t Tensor) Tensor
+	LazySoftmaxCrossEntropyDerivative(t Tensor, label []int) Tensor
 }
 
 // CPUOperator can process CPU tensors.
@@ -993,8 +994,14 @@ func (to CPUOperator) SaveReluForward(in Tensor) Tensor {
 	return nil
 }
 
-// SaveSoftmax of the cpu operator does nothing.
-func (to CPUOperator) SaveSoftmax(t Tensor) Tensor {
+// LazySoftmax of the cpu operator does nothing.
+func (to CPUOperator) LazySoftmax(t Tensor) Tensor {
+	// This function is intentionally left blank
+	return nil	
+}
+
+// LazySoftmaxCrossEntropyDerivative of the cpu operator does nothing.
+func (to CPUOperator) LazySoftmaxCrossEntropyDerivative(t Tensor, label []int) Tensor {
 	// This function is intentionally left blank
 	return nil	
 }

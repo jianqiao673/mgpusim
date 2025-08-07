@@ -97,7 +97,11 @@ func (d *Driver) LaunchKernel(
 ) {
 	queue := d.CreateCommandQueue(ctx)
 	d.EnqueueLaunchKernel(queue, co, gridSize, wgSize, kernelArgs)
+	// dCoData, dKernArgData, dPacket := d.EnqueueLaunchKernel(queue, co, gridSize, wgSize, kernelArgs)
 	d.DrainCommandQueue(queue)
+	// d.FreeMemory(ctx, dCoData)
+	// d.FreeMemory(ctx, dKernArgData)
+	// d.FreeMemory(ctx, dPacket)
 }
 
 func (d *Driver) createAQLPacket(

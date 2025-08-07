@@ -30,3 +30,22 @@ func (s SoftmaxCrossEntropy) Loss(
 
 	return loss, derivative
 }
+
+// SaveLoss calculates the loss and derivative
+// in a memory saving way.
+func (s SoftmaxCrossEntropy) SaveLoss(
+	output tensor.Tensor,
+	label []int,
+) (
+	loss float64,
+	derivative tensor.Tensor,
+) {
+	softmax := s.to.SaveSoftmax(output)
+	loss = s.to.CrossEntropy(softmax, label)
+	derivative = s.to.SoftmaxCrossEntropyDerivative(output, label)
+
+	s.to.Free(softmax)
+
+	return loss, derivative
+}
+

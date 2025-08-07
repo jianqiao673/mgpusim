@@ -13,4 +13,12 @@ type LossFunction interface {
 		loss float64,
 		derivative tensor.Tensor,
 	)
+
+	SaveLoss(
+		output tensor.Tensor,
+		label []int,
+	) (
+		loss float64,
+		derivative tensor.Tensor,
+	)
 }

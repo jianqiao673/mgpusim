@@ -164,7 +164,7 @@ func (t Trainer) SaveTrain() {
 			}
 
 			output := t.saveForward(data)
-			derivative := t.calculateLoss(output, label)
+			derivative := t.saveCalculateLoss(output, label)
 			t.backward(derivative)
 			t.updateParameters()
 			batchNum++
@@ -190,4 +190,18 @@ func (t Trainer) saveForward(data tensor.Tensor) tensor.Tensor {
 		//log.Println("Output ", t.TO.Dump(output))
 	}
 	return output
+}
+
+func (t Trainer) saveCalculateLoss(
+	output tensor.Tensor,
+	inputLabel []int,
+) tensor.Tensor {
+	loss, derivative := t.LossFunc.SaveLoss(output, inputLabel)
+
+	if t.ShowBatchInfo {
+		accuracy := calculateAccuracy(output, inputLabel)
+		log.Printf("loss: %f, accuracy %f\n", loss, accuracy)
+	}
+
+	return derivative
 }

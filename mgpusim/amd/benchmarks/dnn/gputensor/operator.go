@@ -1866,6 +1866,104 @@ func (o *GPUOperator) LazyElementWiseMul(
 	return out
 }
 
+// Sum reduces the number of axes by summing the numbers on given axes.
+func (o *GPUOperator) SaveSum(t tensor.Tensor, axis []int) tensor.Tensor {
+	fmt.Printf("SaveSum\n")
+
+	var in, out tensor.Tensor
+
+	o.axisMustBeIncreasing(axis)
+
+	in = t
+	for i, a := range axis {
+		out = o.saveSumOneAxis(in, a-i)
+
+
+		if i > 0 {
+			o.Free(in)
+		}
+
+		in = out
+	}
+
+	if o.verification {
+		cpuIn := o.gpuTensorToCPUTensor(t)
+		cpuOut := o.cpuOperator.Sum(cpuIn, axis)
+		o.tensorMustMatch(cpuOut, out)
+		fmt.Println("Sum verified.")
+	}
+
+	return out
+}
+
+func (o *GPUOperator) saveSumOneAxis(t tensor.Tensor, axis int) tensor.Tensor {
+	fmt.Printf("saveSumOneAxis\n")
+
+	outSize := make([]int, 0)
+	for i := range t.Size() {
+		if i != axis {
+			outSize = append(outSize, t.Size()[i])
+		}
+	}
+
+	out := o.Create(outSize)
+
+	hOutSize := make([]int32, len(outSize))
+	for i := range outSize {
+		hOutSize[i] = int32(outSize[i])
+	}
+
+	hInSize := make([]int32, len(t.Size()))
+	for i := range t.Size() {
+		hInSize[i] = int32(t.Size()[i])
+	}
+
+	localSize := 64
+	globalSize := out.NumElement()
+
+	// dInSize := o.driver.AllocateMemory(o.ctx, uint64(t.Dim()*4))
+	o.driver.LazyMemCopyH2D(o.ctx, hInSize, uint64(t.Dim()*4))
+	dInSize := o.driver.AllocatedVAddr
+	defer o.driver.FreeMemory(o.ctx, dInSize)
+
+	// dOutSize := o.driver.AllocateMemory(o.ctx, uint64(len(outSize)*4))
+	o.driver.LazyMemCopyH2D(o.ctx, hOutSize, uint64(len(outSize)*4))
+	dOutSize := o.driver.AllocatedVAddr
+	defer o.driver.FreeMemory(o.ctx, dOutSize)
+
+	log.Printf("[saveSumOneAxis] dInSize: 0x%x, dOutSize: 0x%x\n",
+		dInSize, dOutSize)
+
+	dInIndexBuf := o.driver.AllocateMemory(o.ctx,
+		uint64(globalSize*t.Dim()*4))
+	defer o.driver.FreeMemory(o.ctx, dInIndexBuf)
+
+	dOutIndexBuf := o.driver.AllocateMemory(o.ctx,
+		uint64(globalSize*out.Dim()*4))
+	defer o.driver.FreeMemory(o.ctx, dOutIndexBuf)
+
+	args := sumOneAxisKernelArgs{
+		In:          t.(*Tensor).ptr,
+		Out:         out.(*Tensor).ptr,
+		InSize:      dInSize,
+		OutSize:     dOutSize,
+		InDim:       int32(t.Dim()),
+		Axis:        int32(axis),
+		InIndexBuf:  dInIndexBuf,
+		OutIndexBuf: dOutIndexBuf,
+	}
+
+	o.timerStart()
+	o.driver.LazyLaunchKernel(o.ctx, o.sumKernel,
+		[3]uint32{uint32(globalSize), 1, 1},
+		[3]uint16{uint16(localSize), 1, 1},
+		&args,
+	)
+	o.timerEnd("Sum")
+
+	return out
+}
+
 // SaveGemm performs alpha * A * B + beta * C operation.
 // It runs kernels in a memory saving way.
 func (o *GPUOperator) SaveGemm(
@@ -1908,6 +2006,8 @@ func (o *GPUOperator) SaveGemm(
 	return d
 }
 
+// saveMatrixMultiplication performs the gemm operation
+// in a memory saving way.
 func (o *GPUOperator) saveMatrixMultiplication(
 	alpha, beta float64,
 	a, b, c tensor.Tensor,
@@ -1951,7 +2051,8 @@ func (o *GPUOperator) saveMatrixMultiplication(
 	return d
 }
 
-// SaveReluForward Implementation
+// SaveReluForward performs the relu forward operation
+// in a memory saving way.
 func (o *GPUOperator) SaveReluForward(
 	in tensor.Tensor,
 ) tensor.Tensor {
@@ -1984,8 +2085,11 @@ func (o *GPUOperator) SaveReluForward(
 	return out
 }
 
-// Softmax performs the softmax operation.
+// SaveSoftmax performs the softmax operation
+// in a memory saving way.
 func (o *GPUOperator) SaveSoftmax(t tensor.Tensor) tensor.Tensor {
+	fmt.Printf("SaveSoftmax\n")
+
 	o.mustBeTwoDimension(t)
 
 	input := t.(*Tensor)
@@ -2000,13 +2104,13 @@ func (o *GPUOperator) SaveSoftmax(t tensor.Tensor) tensor.Tensor {
 		Output: expInput.ptr,
 		N:      int32(input.NumElement()),
 	}
-	o.driver.LazyLaunchKernel(o.ctx, o.softmaxExpKernel,
+	o.driver.LazyLaunchKernel(o.ctx, o.softmaxExpKernel, // If set Lazy LaunchKernel, then Sum value mismatch
 		[3]uint32{uint32(input.NumElement()), 1, 1},
 		[3]uint16{64, 1, 1},
 		&expArgs,
 	)
 
-	denominator := o.Sum(expInput, []int{1})
+	denominator := o.SaveSum(expInput, []int{1})
 
 	divArgs := softmaxDivKernelArg{
 		ExpInput:    expInput.ptr,

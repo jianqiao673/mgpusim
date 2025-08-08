@@ -252,7 +252,7 @@ func (d *Driver) LazyEnqueueLaunchKernel(
 		
 		d.enqueueLaunchKernelCommand(queue, co, packet, dPacket)
 
-		log.Printf("dCoData: 0x%x, dKernArgData: 0x%x, dPacket: 0x%x\n",
+		log.Printf("[LazyEnqueueLaunchKernel-Allocate] dCoData: 0x%x, dKernArgData: 0x%x, dPacket: 0x%x\n",
 			dCoData, dKernArgData, dPacket)
 
 		return dCoData, dKernArgData, dPacket
@@ -272,6 +272,8 @@ func (d *Driver) LazyLaunchKernel(
 	queue := d.CreateCommandQueue(ctx)
 	dCoData, dKernArgData, dPacket := d.LazyEnqueueLaunchKernel(queue, co, gridSize, wgSize, kernelArgs)
 	d.DrainCommandQueue(queue)
+	log.Printf("[LazyLaunchKernel-Free] dCoData: 0x%x, dKernArgData: 0x%x, dPacket: 0x%x\n",
+		dCoData, dKernArgData, dPacket)
 	d.FreeMemory(ctx, dCoData)
 	d.FreeMemory(ctx, dKernArgData)
 	d.FreeMemory(ctx, dPacket)

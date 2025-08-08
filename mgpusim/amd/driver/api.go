@@ -422,7 +422,7 @@ func (d *Driver) AllocateMemory2(
 	allocateReq.SetAddress(pAddr)
 	tracing.TraceReqFinalize(allocateReq, d)
 
-	log.Printf("[LazyAllocate] pid: %d, deviceid: %d, vAddr: 0x%x, pAddr: 0x%x, byteSize: %d\n", ctx.pid, ctx.currentGPUID, ptr, pAddr, byteSize)
+	log.Printf("[AllocateMemory2-Allocate] pid: %d, deviceid: %d, vAddr: 0x%x, pAddr: 0x%x, byteSize: %d\n", ctx.pid, ctx.currentGPUID, ptr, pAddr, byteSize)
 	return Ptr(ptr), pAddr
 }
 
@@ -433,7 +433,7 @@ func (d *Driver) LazyEnqueueMemCopyD2D(
 	dst Ptr,
 	src Ptr,
 	num int,
-) {
+) (dCoData, dKernArgData, dPacket Ptr) {
 	co := kernels.LoadProgramFromMemory(
 		kernelBytes, "copyKernel")
 	if co == nil {
@@ -445,13 +445,20 @@ func (d *Driver) LazyEnqueueMemCopyD2D(
 	wgSize := [3]uint16{64, 1, 1}
 	kernelArgs := KernelMemCopyArgs{src, dst, int64(num)}
 
-	d.LazyEnqueueLaunchKernel(queue, co, gridSize, wgSize, &kernelArgs)
+	dCoData, dKernArgData, dPacket = d.LazyEnqueueLaunchKernel(queue, co, gridSize, wgSize, &kernelArgs)
+
+	return dCoData, dKernArgData, dPacket
 }
 
 // LazyMemCopyD2D lazily copies a memory from a GPU device to another GPU device. num is
 // the total number of bytes.
 func (d *Driver) LazyMemCopyD2D(ctx *Context, dst Ptr, src Ptr, num int) {
 	queue := d.CreateCommandQueue(ctx)
-	d.LazyEnqueueMemCopyD2D(queue, dst, src, num)
+	dCoData, dKernArgData, dPacket := d.LazyEnqueueMemCopyD2D(queue, dst, src, num)
 	d.DrainCommandQueue(queue)
+	log.Printf("[LazyMemCopyD2D-Free] dCoData: 0x%x, dKernArgData: 0x%x, dPacket: 0x%x\n",
+		dCoData, dKernArgData, dPacket)
+	d.FreeMemory(ctx, dCoData)
+	d.FreeMemory(ctx, dKernArgData)
+	d.FreeMemory(ctx, dPacket)
 }

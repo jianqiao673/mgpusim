@@ -64,5 +64,6 @@ func (r *ReluLayer) SaveForward(
 func (r *ReluLayer) SaveBackward(input tensor.Tensor) tensor.Tensor {
 	out := r.to.LazyReluBackward(r.forwardInput, input)
 	r.to.Free(r.forwardInput)
+	r.to.Free(input) // Free input
 	return out
 }

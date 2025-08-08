@@ -247,6 +247,9 @@ func (l *FullyConnectedLayer) SaveForward(
 
 	l.to.Free(in)
 	l.to.Free(weightMat)
+	l.to.Free(input) // Free input.
+	l.to.Free(biasMat) // Free biasMat
+	l.to.Free(biasMatReshape) // Free biasMatReshape
 
 	// fmt.Printf("biasMat: 0x%x, biasMatReshape: 0x%x\n", 
 	// 	biasMat, biasMatReshape)
@@ -260,7 +263,7 @@ func (l *FullyConnectedLayer) SaveForward(
 func (l *FullyConnectedLayer) SaveBackward(
 	input tensor.Tensor,
 ) tensor.Tensor {
-	l.to.Clear(l.gradients)
+	l.to.Clear(l.gradients) // Original clear does not allocate new memory.
 
 	l.saveCalculateWeightGradients(input)
 	l.lazyCalculateBiasGradients(input)
@@ -271,6 +274,7 @@ func (l *FullyConnectedLayer) SaveBackward(
 	}
 
 	l.to.Free(l.forwardInput)
+	l.to.Free(input) // Free input.
 
 	return output
 }

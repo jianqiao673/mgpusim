@@ -203,6 +203,8 @@ func (t Trainer) saveCalculateLoss(
 		log.Printf("loss: %f, accuracy %f\n", loss, accuracy)
 	}
 
+	t.TO.Free(output) // Free output
+
 	return derivative
 }
 
@@ -214,6 +216,7 @@ func (t Trainer) saveBackward(derivative tensor.Tensor) {
 		input := output
 		output = t.Network.Layers[i].SaveBackward(input)
 	}
+	t.TO.Free(derivative) // Free derivative
 }
 
 func (t Trainer) lazyUpdateParameters() {

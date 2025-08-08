@@ -197,7 +197,7 @@ func (o *GPUOperator) Create(size []int) tensor.Tensor {
 
 	t.ptr = o.driver.AllocateMemory(o.ctx, uint64(t.NumElement()*sizeOfFloat32))
 
-	fmt.Printf("[Create Tersor] vAddr: 0x%x, byteSize: %d\n", t.ptr, size)
+	log.Printf("[Create Tersor] vAddr: 0x%x, byteSize: %d\n", t.ptr, size)
 
 	return t
 }
@@ -2028,8 +2028,6 @@ func (o *GPUOperator) SaveGemm(
 		o.Free(tempB)
 	}
 
-	// Cannot free a, b, c
-
 	if o.verification {
 		cpuA := o.gpuTensorToCPUTensor(a)
 		cpuB := o.gpuTensorToCPUTensor(b)
@@ -2039,6 +2037,10 @@ func (o *GPUOperator) SaveGemm(
 		o.tensorMustMatch(cpuOut, d)
 		fmt.Println("Gemm verified.")
 	}
+
+	o.Free(a)
+	o.Free(b)
+	o.Free(c)
 
 	return d
 }
@@ -2111,13 +2113,15 @@ func (o *GPUOperator) SaveReluForward(
 		[3]uint16{64, 1, 1},
 		&args)
 	o.timerEnd("ReluForward")
-
+	
 	if o.verification {
 		cpuIn := o.gpuTensorToCPUTensor(in)
 		cpuOut := o.cpuOperator.ReluForward(cpuIn)
 		o.tensorMustMatch(cpuOut, out)
 		fmt.Println("ReluForward verified.")
 	}
+	
+	o.Free(in) // Free in
 
 	return out
 }
@@ -2148,6 +2152,7 @@ func (o *GPUOperator) LazySoftmax(t tensor.Tensor) tensor.Tensor {
 	)
 
 	denominator := o.LazySum(expInput, []int{1})
+	defer o.Free(denominator) // Free denominator
 
 	divArgs := softmaxDivKernelArg{
 		ExpInput:    expInput.ptr,
@@ -2246,6 +2251,9 @@ func (o *GPUOperator) LazyReluBackward(
 		o.tensorMustMatch(cpuOut, out)
 		fmt.Println("ReluBackward verified.")
 	}
+
+	o.Free(forwardIn) // Free in
+	o.Free(backIn)    // Free backIn
 
 	return out
 }

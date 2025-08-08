@@ -1,6 +1,8 @@
 package optimization
 
 import (
+	"log"
+
 	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/tensor"
 )
 
@@ -78,6 +80,8 @@ func (r *Adam) LazyUpdateParameters(layer Layer) {
 
 		s = sSquare
 		r.historyS[layer] = s
+
+		log.Printf("[LazyUpdateParameters] historyV: 0x%x, historyS: 0x%x\n", v, s)
 	}
 
 	r.to.LazyAdam(params, gradients, v, s,

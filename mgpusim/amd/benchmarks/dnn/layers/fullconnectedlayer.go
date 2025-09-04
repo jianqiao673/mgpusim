@@ -48,10 +48,10 @@ func NewFullyConnectedLayer(
 	l.weightGradients = to.Slice(l.gradients, 0, numWeight)
 	l.biasGradients = to.Slice(l.gradients, numWeight, numParams)
 
-	fmt.Printf("[NewFullyConnectedLayer] parameters: 0x%x, weights: 0x%x, bias: 0x%x\n", 
+	fmt.Printf("[NewFullyConnectedLayer-Allocate] parameters: 0x%x, weights: 0x%x, bias: 0x%x\n", 
 		l.parameters, l.weights, l.bias)
 		
-	fmt.Printf("[NewFullyConnectedLayer] gradients: 0x%x, weightGradients: 0x%x, biasGradients: 0x%x\n", 
+	fmt.Printf("[NewFullyConnectedLayer-Allocate] gradients: 0x%x, weightGradients: 0x%x, biasGradients: 0x%x\n", 
 		l.gradients, l.weightGradients, l.biasGradients)
 
 	return l
@@ -198,6 +198,9 @@ func SaveNewFullyConnectedLayer(
 	l.weightGradients = to.Slice(l.gradients, 0, numWeight)
 	l.biasGradients = to.Slice(l.gradients, numWeight, numParams)
 
+	fmt.Printf("[SaveNewFullyConnectedLayer-Allocate] gradients: 0x%x, weightGradients: 0x%x, biasGradients: 0x%x\n", 
+		l.gradients, l.weightGradients, l.biasGradients)
+
 	return l
 }
 
@@ -227,7 +230,7 @@ func (l *FullyConnectedLayer) LazyRandomize() {
 	l.weights = slices[1]
 	l.bias = slices[2]
 
-	fmt.Printf("[LazyRandomize] parameters: 0x%x, weights: 0x%x, bias: 0x%x\n", l.parameters, l.weights, l.bias)
+	fmt.Printf("[LazyRandomize-Allocate] parameters: 0x%x, weights: 0x%x, bias: 0x%x\n", l.parameters, l.weights, l.bias)
 }
 
 // SaveForward performs the forward propagation operation

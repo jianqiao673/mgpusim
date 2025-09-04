@@ -30,6 +30,8 @@ type Trainer struct {
 
 // Train will run the training algorithm on the network.
 func (t Trainer) Train() {
+	log.Printf("Epoch: %d, Batch Size: %d\n", t.Epoch, t.BatchSize)
+
 	for currentEpoch := 0; currentEpoch < t.Epoch; currentEpoch++ {
 		log.Printf("Epoch %d\n", currentEpoch)
 
@@ -147,6 +149,8 @@ func calculateAccuracy(output tensor.Tensor, inputLabel []int) float64 {
 
 // Train will run the training algorithm on the network.
 func (t Trainer) SaveTrain() {
+	log.Printf("Epoch: %d, Batch Size: %d\n", t.Epoch, t.BatchSize)
+
 	for currentEpoch := 0; currentEpoch < t.Epoch; currentEpoch++ {
 		log.Printf("Epoch %d\n", currentEpoch)
 

@@ -278,3 +278,23 @@ func (d *Driver) LazyLaunchKernel(
 	d.FreeMemory(ctx, dKernArgData)
 	d.FreeMemory(ctx, dPacket)
 }
+
+// BaseLaunchKernel is an easy way to run a kernel on the GCN3 simulator. 
+// It launches the kernel immediately.
+// Compared to LaunchKernel, BaseLaunchKernel frees data.
+func (d *Driver) BaseLaunchKernel(
+	ctx *Context,
+	co *insts.HsaCo,
+	gridSize [3]uint32,
+	wgSize [3]uint16,
+	kernelArgs interface{},
+) {
+	queue := d.CreateCommandQueue(ctx)
+	dCoData, dKernArgData, dPacket := d.EnqueueLaunchKernel(queue, co, gridSize, wgSize, kernelArgs)
+	d.DrainCommandQueue(queue)
+	log.Printf("[BaseLaunchKernel-Free] dCoData: 0x%x, dKernArgData: 0x%x, dPacket: 0x%x\n",
+		dCoData, dKernArgData, dPacket)
+	d.FreeMemory(ctx, dCoData)
+	d.FreeMemory(ctx, dKernArgData)
+	d.FreeMemory(ctx, dPacket)
+}

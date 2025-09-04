@@ -96,6 +96,8 @@ func (l *FullyConnectedLayer) Forward(
 	l.to.Free(biasMat)
 	l.to.Free(biasMatReshape)
 
+	l.to.Free(input) // Free input.
+
 	return out
 }
 
@@ -114,6 +116,7 @@ func (l *FullyConnectedLayer) Backward(
 	}
 
 	l.to.Free(l.forwardInput)
+	l.to.Free(input) // Free input.
 
 	return output
 }

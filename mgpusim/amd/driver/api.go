@@ -315,7 +315,7 @@ func (d *Driver) EnqueueMemCopyD2D(
 	dst Ptr,
 	src Ptr,
 	num int,
-) {
+) (dCoData, dKernArgData, dPacket Ptr) {
 	co := kernels.LoadProgramFromMemory(
 		kernelBytes, "copyKernel")
 	if co == nil {
@@ -328,6 +328,11 @@ func (d *Driver) EnqueueMemCopyD2D(
 	kernelArgs := KernelMemCopyArgs{src, dst, int64(num)}
 
 	d.EnqueueLaunchKernel(queue, co, gridSize, wgSize, &kernelArgs)
+	// dCoData, dKernArgData, dPacket = d.EnqueueLaunchKernel(queue, co, gridSize, wgSize, &kernelArgs)
+	// log.Printf("[EnqueueMemCopyD2D] dCoData: 0x%x, dKernArgData: 0x%x, dPacket: 0x%x\n",
+		// dCoData, dKernArgData, dPacket)
+
+	return dCoData, dKernArgData, dPacket
 }
 
 // MemCopyH2D copies a memory from the host to a GPU device.
@@ -348,8 +353,13 @@ func (d *Driver) MemCopyD2H(ctx *Context, dst interface{}, src Ptr) {
 // the total number of bytes.
 func (d *Driver) MemCopyD2D(ctx *Context, dst Ptr, src Ptr, num int) {
 	queue := d.CreateCommandQueue(ctx)
-	d.EnqueueMemCopyD2D(queue, dst, src, num)
+	dCoData, dKernArgData, dPacket := d.EnqueueMemCopyD2D(queue, dst, src, num)
 	d.DrainCommandQueue(queue)
+	log.Printf("[MemCopyD2D-Free] dCoData: 0x%x, dKernArgData: 0x%x, dPacket: 0x%x\n",
+		dCoData, dKernArgData, dPacket)
+	d.FreeMemory(ctx, dCoData)
+	d.FreeMemory(ctx, dKernArgData)
+	d.FreeMemory(ctx, dPacket)
 }
 
 // EnmapMemAlloc registers a memory allocation request for the MemCopyH2D

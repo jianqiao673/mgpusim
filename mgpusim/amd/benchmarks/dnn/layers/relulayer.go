@@ -32,6 +32,7 @@ func (r *ReluLayer) Forward(
 func (r *ReluLayer) Backward(input tensor.Tensor) tensor.Tensor {
 	out := r.to.ReluBackward(r.forwardInput, input)
 	r.to.Free(r.forwardInput)
+	r.to.Free(input) // Free input
 	return out
 }
 

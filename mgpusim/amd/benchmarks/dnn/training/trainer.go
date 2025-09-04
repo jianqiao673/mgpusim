@@ -88,6 +88,8 @@ func (t Trainer) calculateLoss(
 		log.Printf("loss: %f, accuracy %f\n", loss, accuracy)
 	}
 
+	t.TO.Free(output) // Free output
+
 	return derivative
 }
 
@@ -99,6 +101,7 @@ func (t Trainer) backward(derivative tensor.Tensor) {
 		input := output
 		output = t.Network.Layers[i].Backward(input)
 	}
+	t.TO.Free(derivative) // Free derivative
 }
 
 func (t Trainer) updateParameters() {

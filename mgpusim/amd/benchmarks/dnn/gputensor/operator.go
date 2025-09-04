@@ -1251,6 +1251,7 @@ func (o *GPUOperator) Softmax(t tensor.Tensor) tensor.Tensor {
 	)
 
 	denominator := o.Sum(expInput, []int{1})
+	defer o.Free(denominator) // Free denominator
 
 	divArgs := softmaxDivKernelArg{
 		ExpInput:    expInput.ptr,
@@ -1612,6 +1613,8 @@ func (o *GPUOperator) ReluForward(
 		fmt.Println("ReluForward verified.")
 	}
 
+	o.Free(in) // Free in
+
 	return out
 }
 
@@ -1647,6 +1650,9 @@ func (o *GPUOperator) ReluBackward(
 		o.tensorMustMatch(cpuOut, out)
 		fmt.Println("ReluBackward verified.")
 	}
+
+	o.Free(forwardIn) // Free in
+	o.Free(backIn)    // Free backIn
 
 	return out
 }

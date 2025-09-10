@@ -1,3 +1,5 @@
 bookmarks.json
 log
 pytorch
+.DS_Store
+data

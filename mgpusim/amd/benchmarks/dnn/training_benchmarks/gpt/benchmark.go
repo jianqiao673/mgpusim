@@ -103,9 +103,9 @@ func NewBenchmark(driver *driver.Driver, saveMemory bool, config Config) *Benchm
 		DataSource:      NewDataSource(b.to),
 		Network:         b.network,
 		LossFunc:        training.NewSoftmaxCrossEntropy(b.to),
-		OptimizationAlg: optimization.NewAdam(b.to, 0.03),
+		OptimizationAlg: optimization.NewAdamW(b.to, 0.003, 0.1),
 		Epoch:           1, // default: 50
-		BatchSize:       20, // default: 4
+		// BatchSize:       20, // default: 4
 		ShowBatchInfo:   true,
 	}
 

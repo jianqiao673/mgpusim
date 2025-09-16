@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/gputensor"
-	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/layers"
 	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/training"
 	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/training/optimization"
 	"github.com/sarchlab/mgpusim/v4/amd/driver"
@@ -53,57 +52,61 @@ func NewBenchmark(driver *driver.Driver, saveMemory bool, config Config) *Benchm
 	if b.saveMemory {
 		// TODO
 	} else {
-		b.network = training.Network{
-			Layers: []layers.Layer{
-				// Token embedding
-				layers.NewEmbeddingLayer(
-					"wte",
-					b.to,
-					b.config.VocabSize,
-					b.config.NEmbd,
-				),
+		b.network = training.Network{ // TODO: implement GPT model
+			// Layers: []layers.Layer{
+			// 	// Token embedding
+			// 	layers.NewEmbeddingLayer(
+			// 		"wte",
+			// 		b.to,
+			// 		b.config.VocabSize,
+			// 		b.config.NEmbd,
+			// 	),
 
-				// Positional embedding
-				layers.NewEmbeddingLayer(
-					"wpe",
-					b.to,
-					b.config.BlockSize,
-					b.config.NEmbd,
-				),
+			// 	// Positional embedding
+			// 	layers.NewEmbeddingLayer(
+			// 		"wpe",
+			// 		b.to,
+			// 		b.config.BlockSize,
+			// 		b.config.NEmbd,
+			// 	),
 
-				// Transformer blocks (h)
-				NewTransformerLayerStack(
-					b.to,
-					b.config.NLayer,
-					b.config.NEmbd,
-					b.config.NumHeads,
-				),
+			// 	// Transformer blocks (h)
+			// 	NewTransformerLayerStack(
+			// 		b.to,
+			// 		b.config.NLayer,
+			// 		b.config.NEmbd,
+			// 		b.config.NumHeads,
+			// 	),
 
 				// Final LayerNorm
-				layers.NewLayerNormLayer(
-					"ln_f",
-					b.to,
-					b.config.NEmbd,
-				),
+			// 	layers.NewLayerNormLayer(
+			// 		"ln_f",
+			// 		b.to,
+			// 		b.config.NEmbd,
+			// 	),
 
-				// LM Head projection (weight tied to wte)
-				layers.NewFullyConnectedLayer(
-					"lm_head",
-					b.to,
-					b.config.NEmbd,
-					b.config.VocabSize,
-					b.config.Bias,
-				),
-			},
+			// 	// LM Head projection (weight tied to wte)
+			// 	layers.NewFullyConnectedLayer(
+			// 		"lm_head",
+			// 		b.to,
+			// 		b.config.NEmbd,
+			// 		b.config.VocabSize,
+			// 		b.config.Bias,
+			// 	),
+			// },
 		}
 	}
 
+	seq := []int{1, 1, 1, 1, 0, 1, 1, 1, 1, 0}
+	contextLength := 3
+
 	b.trainer = training.Trainer{
 		TO:              b.to,
-		DataSource:      NewDataSource(b.to),
+		DataSource:      NewDataSource(b.to, seq, contextLength),
 		Network:         b.network,
-		LossFunc:        training.NewSoftmaxCrossEntropy(b.to),
-		OptimizationAlg: optimization.NewAdamW(b.to, 0.003, 0.1),
+		LossFunc:        training.NewSoftmaxCrossEntropy(b.to), // TODO: check method of cross entropy
+		OptimizationAlg: optimization.NewAdam(b.to, 0.003),
+		// OptimizationAlg: optimization.NewAdamW(b.to, 0.003, 0.1), // TODO: implement AdamW
 		Epoch:           1, // default: 50
 		// BatchSize:       20, // default: 4
 		ShowBatchInfo:   true,

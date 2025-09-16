@@ -2,7 +2,7 @@
 # run script for macOS
 
 # 默认值
-DEFAULT_PROGRAM="xor"
+DEFAULT_PROGRAM="gpt"
 DEFAULT_ARGS="-timing -trace-vis"
 # DEFAULT_ARGS="-timing -trace-vis -verify"
 # DEFAULT_ARGS="-timing -trace-vis -save-memory"

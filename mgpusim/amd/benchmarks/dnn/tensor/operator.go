@@ -77,6 +77,11 @@ type Operator interface {
 		params, gradient, vHistory, sHistory Tensor,
 		smoothFactor1, smoothFactor2, learningRate float64,
 	)
+	EmbeddingForward(inputIndices, weight Tensor, paddingIdx int) Tensor
+    EmbeddingBackwardWeight(inputIndices, gradOutput Tensor, paddingIdx int, scale float32) Tensor
+	CreateEmbeddingOutput(inputIndices, weight Tensor) Tensor
+    CreateEmbeddingGradWeight(weight Tensor) Tensor
+	CausalSelfAttention(x, wq, wk, wv, wo Tensor, blockSize, nHead int) Tensor
 }
 
 // CPUOperator can process CPU tensors.
@@ -1064,4 +1069,284 @@ func (to CPUOperator) LazyAdam(
 	smoothFactor1, smoothFactor2, learningRate float64,
 ) {
 	// This function is intentionally left blank
+}
+// EmbeddingForward 执行 embedding 前向传播
+func (to CPUOperator) EmbeddingForward(
+    inputIndices, weight Tensor,
+    paddingIdx int,
+) Tensor {
+    batchSize := inputIndices.Size()[0]
+    seqLen := inputIndices.Size()[1]
+    embeddingDim := weight.Size()[1]
+
+    output := to.Create([]int{batchSize, seqLen, embeddingDim})
+    outputData := output.Vector()
+    indicesData := inputIndices.Vector()
+    weightData := weight.Vector()
+
+    for i := 0; i < batchSize; i++ {
+        for j := 0; j < seqLen; j++ {
+            index := int(indicesData[i*seqLen+j])
+
+            if paddingIdx >= 0 && index == paddingIdx {
+                for k := 0; k < embeddingDim; k++ {
+                    outputData[(i*seqLen+j)*embeddingDim+k] = 0
+                }
+                continue
+            }
+
+            if index < 0 || index >= weight.Size()[0] {
+                for k := 0; k < embeddingDim; k++ {
+                    outputData[(i*seqLen+j)*embeddingDim+k] = 0
+                }
+                continue
+            }
+
+            for k := 0; k < embeddingDim; k++ {
+                outputData[(i*seqLen+j)*embeddingDim+k] = weightData[index*embeddingDim+k]
+            }
+        }
+    }
+
+    return output
+}
+
+// EmbeddingBackwardWeight 执行 embedding 权重梯度计算
+func (to CPUOperator) EmbeddingBackwardWeight(
+    inputIndices, gradOutput, weight Tensor,
+    paddingIdx int,
+    scale float32,
+) Tensor {
+    indicesData := inputIndices.Vector()
+    gradOutputData := gradOutput.Vector()
+
+    batchSize := inputIndices.Size()[0]
+    seqLen := inputIndices.Size()[1]
+    vocabSize := weight.Size()[0]
+    embeddingDim := weight.Size()[1]
+
+    gradWeight := to.Create([]int{vocabSize, embeddingDim})
+    gradWeightData := gradWeight.Vector()
+
+    for i := 0; i < batchSize; i++ {
+        for j := 0; j < seqLen; j++ {
+            index := int(indicesData[i*seqLen+j])
+            if paddingIdx >= 0 && index == paddingIdx {
+                continue
+            }
+            if index < 0 || index >= vocabSize {
+                continue
+            }
+
+            for k := 0; k < embeddingDim; k++ {
+                gradWeightData[index*embeddingDim+k] += gradOutputData[(i*seqLen+j)*embeddingDim+k] * float64(scale)
+            }
+        }
+    }
+
+    return gradWeight
+}
+
+func (to CPUOperator) CausalSelfAttention(
+    x Tensor,          // [B, T, C]
+    wq, wk, wv, wo Tensor, // 权重矩阵 [C, C]
+    blockSize, nHead int,
+) Tensor {
+    B := x.Size()[0]
+    T := x.Size()[1]
+    C := x.Size()[2]
+    headSize := C / nHead
+
+    // 1. 分别计算 Q, K, V - 保持3D形状 [B, T, C]
+    q := to.Gemm(false, false, 1.0, 0.0, x, wq, to.Zeros([]int{B, T, C}))
+    k := to.Gemm(false, false, 1.0, 0.0, x, wk, to.Zeros([]int{B, T, C}))
+    v := to.Gemm(false, false, 1.0, 0.0, x, wv, to.Zeros([]int{B, T, C}))
+    defer to.Free(q)
+    defer to.Free(k)
+    defer to.Free(v)
+
+    // 2. 重塑为多头格式 [B, T, nHead, headSize] -> [B, nHead, T, headSize]
+    qReshaped := to.Reshape(q, []int{B, T, nHead, headSize})
+    qTransposed := to.Transpose(qReshaped, []int{0, 2, 1, 3}) // [B, nHead, T, headSize]
+    defer to.Free(qReshaped)
+
+    kReshaped := to.Reshape(k, []int{B, T, nHead, headSize})
+    kTransposed := to.Transpose(kReshaped, []int{0, 2, 1, 3}) // [B, nHead, T, headSize]
+    defer to.Free(kReshaped)
+
+    vReshaped := to.Reshape(v, []int{B, T, nHead, headSize})
+    vTransposed := to.Transpose(vReshaped, []int{0, 2, 1, 3}) // [B, nHead, T, headSize]
+    defer to.Free(vReshaped)
+
+    // 3. 计算注意力分数: (q @ k^T) / sqrt(headSize)
+    kt := to.Transpose(kTransposed, []int{0, 1, 3, 2}) // [B, nHead, headSize, T]
+    defer to.Free(kTransposed)
+
+    // 需要实现4D矩阵乘法，这里简化处理
+    scores := to.computeAttentionScoresCPU(qTransposed, kt, B, nHead, T, headSize)
+    defer to.Free(kt)
+    defer to.Free(qTransposed)
+
+    // 4. 应用因果掩码
+    causalMask := to.CreateCausalMask(blockSize)
+    scores = to.ApplyCausalMask(scores, causalMask, T)
+    defer to.Free(causalMask)
+
+    // 5. Softmax
+    attn := to.Softmax4D(scores)
+    defer to.Free(scores)
+
+    // 6. 注意力输出: attn @ v
+    output := to.computeAttentionOutputCPU(attn, vTransposed, B, nHead, T, headSize)
+    defer to.Free(attn)
+    defer to.Free(vTransposed)
+
+    // 7. 转置并重塑回 [B, T, C]
+    output = to.Transpose(output, []int{0, 2, 1, 3}) // [B, T, nHead, headSize]
+    output = to.Reshape(output, []int{B, T, C})      // [B, T, C]
+
+    // 8. 输出投影
+    output = to.Gemm(false, false, 1.0, 0.0, output, wo, to.Zeros([]int{B, T, C}))
+
+    return output
+}
+func (to CPUOperator) computeAttentionScoresCPU(q, kt Tensor, B, nHead, T, headSize int) Tensor {
+    // 这里需要实现4D矩阵乘法，简化版本
+    output := to.Zeros([]int{B, nHead, T, T})
+    outputData := output.Vector()
+    qData := q.Vector()
+    ktData := kt.Vector()
+    
+    scale := 1.0 / math.Sqrt(float64(headSize))
+    
+    for b := 0; b < B; b++ {
+        for h := 0; h < nHead; h++ {
+            for i := 0; i < T; i++ {
+                for j := 0; j < T; j++ {
+                    sum := 0.0
+                    for k := 0; k < headSize; k++ {
+                        qIdx := ((b*nHead+h)*T+i)*headSize + k
+                        ktIdx := ((b*nHead+h)*headSize+k)*T + j
+                        sum += qData[qIdx] * ktData[ktIdx]
+                    }
+                    outIdx := ((b*nHead+h)*T+i)*T + j
+                    outputData[outIdx] = sum * scale
+                }
+            }
+        }
+    }
+    
+    return output
+}
+
+// 计算注意力输出 (简化实现)
+func (to CPUOperator) computeAttentionOutputCPU(attn, v Tensor, B, nHead, T, headSize int) Tensor {
+    output := to.Zeros([]int{B, nHead, T, headSize})
+    outputData := output.Vector()
+    attnData := attn.Vector()
+    vData := v.Vector()
+    
+    for b := 0; b < B; b++ {
+        for h := 0; h < nHead; h++ {
+            for i := 0; i < T; i++ {
+                for k := 0; k < headSize; k++ {
+                    sum := 0.0
+                    for j := 0; j < T; j++ {
+                        attnIdx := ((b*nHead+h)*T+i)*T + j
+                        vIdx := ((b*nHead+h)*T+j)*headSize + k
+                        sum += attnData[attnIdx] * vData[vIdx]
+                    }
+                    outIdx := ((b*nHead+h)*T+i)*headSize + k
+                    outputData[outIdx] = sum
+                }
+            }
+        }
+    }
+    
+    return output
+}
+
+// 4D Softmax
+func (to CPUOperator) Softmax4D(t Tensor) Tensor {
+    size := t.Size()
+    B := size[0]
+    nHead := size[1]
+    T := size[2]
+    
+    output := to.Clone(t)
+    outputData := output.Vector()
+    
+    for b := 0; b < B; b++ {
+        for h := 0; h < nHead; h++ {
+            for i := 0; i < T; i++ {
+                // 找最大值
+                maxVal := -math.MaxFloat64
+                for j := 0; j < T; j++ {
+                    idx := ((b*nHead+h)*T+i)*T + j
+                    if outputData[idx] > maxVal {
+                        maxVal = outputData[idx]
+                    }
+                }
+                
+                // 计算指数和
+                sum := 0.0
+                for j := 0; j < T; j++ {
+                    idx := ((b*nHead+h)*T+i)*T + j
+                    outputData[idx] = math.Exp(outputData[idx] - maxVal)
+                    sum += outputData[idx]
+                }
+                
+                // 归一化
+                for j := 0; j < T; j++ {
+                    idx := ((b*nHead+h)*T+i)*T + j
+                    outputData[idx] /= sum
+                }
+            }
+        }
+    }
+    
+    return output
+}
+
+// CPU版本的ApplyCausalMask
+func (to CPUOperator) ApplyCausalMask(att, bias Tensor, T int) Tensor {
+    output := to.Clone(att)
+    outputData := output.Vector()
+    biasData := bias.Vector()
+    
+    size := att.Size()
+    B := size[0]
+    nHead := size[1]
+    
+    for b := 0; b < B; b++ {
+        for h := 0; h < nHead; h++ {
+            for i := 0; i < T; i++ {
+                for j := 0; j < T; j++ {
+                    idx := ((b*nHead+h)*T+i)*T + j
+                    maskIdx := i*T + j
+                    
+                    if biasData[maskIdx] == 0.0 { // 需要mask的位置
+                        outputData[idx] = -1e9
+                    }
+                }
+            }
+        }
+    }
+    
+    return output
+}
+
+// CPU版本的CreateCausalMask
+func (to CPUOperator) CreateCausalMask(blockSize int) Tensor {
+    data := make([]float64, blockSize*blockSize)
+    for i := 0; i < blockSize; i++ {
+        for j := 0; j < blockSize; j++ {
+            if j <= i {
+                data[i*blockSize+j] = 1.0
+            } else {
+                data[i*blockSize+j] = 0.0
+            }
+        }
+    }
+    return to.CreateWithData(data, []int{1, 1, blockSize, blockSize}, "causal_mask")
 }

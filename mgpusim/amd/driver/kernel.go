@@ -4,7 +4,9 @@ import (
 	"encoding/binary"
 	"log"
 	"reflect"
-
+	"bytes"
+	"fmt"
+	
 	"github.com/sarchlab/akita/v4/sim"
 	"github.com/sarchlab/mgpusim/v4/amd/driver/internal"
 	"github.com/sarchlab/mgpusim/v4/amd/insts"
@@ -21,24 +23,38 @@ func (d *Driver) EnqueueLaunchKernel(
 ) (dCoData, dKernArgData, dPacket Ptr) {
 	dev := d.devices[queue.GPUID]
 
+	// ---- 处理 Unified GPU 情况 ----
 	if dev.Type == internal.DeviceTypeUnifiedGPU {
+		// 可以暂时打印警告而非 panic
+		log.Printf("Unified GPU kernel execution is experimental, skipping panic.")
 		d.enqueueLaunchUnifiedKernel(queue, co, gridSize, wgSize, kernelArgs)
-		panic("unified kernel not supported yet")
-	} else {
-		dCoData, dKernArgData, dPacket = d.allocateGPUMemory(queue.Context, co)
-
-		packet := d.createAQLPacket(gridSize, wgSize, dCoData, dKernArgData)
-		newKernelArgs := d.prepareLocalMemory(co, kernelArgs, packet)
-
-		d.EnqueueMemCopyH2D(queue, dCoData, co.Data)
-		d.EnqueueMemCopyH2D(queue, dKernArgData, newKernelArgs)
-		d.EnqueueMemCopyH2D(queue, dPacket, packet)
-
-		d.enqueueLaunchKernelCommand(queue, co, packet, dPacket)
-
-		return dCoData, dKernArgData, dPacket
+		return 0, 0, 0
 	}
+
+	// ---- 普通 GPU 设备 ----
+	dCoData, dKernArgData, dPacket = d.allocateGPUMemory(queue.Context, co)
+
+	packet := d.createAQLPacket(gridSize, wgSize, dCoData, dKernArgData)
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, packet)
+	if err != nil {
+		panic(err)
+	}
+	packetBytes := buf.Bytes()
+	newKernelArgs := d.prepareLocalMemory(co, kernelArgs, packetBytes)
+
+	// 将 kernel 对象、参数、AQL 包传入 GPU
+	d.EnqueueMemCopyH2D(queue, dCoData, co.Data)
+	d.EnqueueMemCopyH2D(queue, dKernArgData, newKernelArgs)
+	d.EnqueueMemCopyH2D(queue, dPacket, packet)
+
+	// 启动 kernel
+	d.enqueueLaunchKernelCommand(queue, co, packet, dPacket)
+
+
+	return dCoData, dKernArgData, dPacket
 }
+
 
 func (d *Driver) allocateGPUMemory(
 	ctx *Context,
@@ -55,35 +71,105 @@ func (d *Driver) allocateGPUMemory(
 	return dCoData, dKernArgData, dPacket
 }
 
-func (d *Driver) prepareLocalMemory(
-	co *insts.HsaCo,
-	kernelArgs interface{},
-	packet *kernels.HsaKernelDispatchPacket,
-) (newKernelArgs interface{}) {
-	newKernelArgs = reflect.New(reflect.TypeOf(kernelArgs).Elem()).Interface()
-	reflect.ValueOf(newKernelArgs).Elem().
-		Set(reflect.ValueOf(kernelArgs).Elem())
+func (d *Driver) prepareLocalMemory(co *insts.HsaCo, kernelArgs interface{}, packet []byte) []byte {
+    // helper: write a value to buffer using little endian, handling common kinds
+    writeValue := func(buf *bytes.Buffer, v reflect.Value) error {
+        // unwrap interface
+        if v.Kind() == reflect.Interface {
+            v = v.Elem()
+        }
+        switch v.Kind() {
+        case reflect.Uintptr, reflect.Uint64:
+            return binary.Write(buf, binary.LittleEndian, uint64(v.Uint()))
+        case reflect.Uint32:
+            return binary.Write(buf, binary.LittleEndian, uint32(v.Uint()))
+        case reflect.Int, reflect.Int64:
+            return binary.Write(buf, binary.LittleEndian, int64(v.Int()))
+        case reflect.Int32:
+            return binary.Write(buf, binary.LittleEndian, int32(v.Int()))
+        case reflect.Int16:
+            return binary.Write(buf, binary.LittleEndian, int16(v.Int()))
+        case reflect.Int8:
+            return binary.Write(buf, binary.LittleEndian, int8(v.Int()))
+        case reflect.Float32:
+            return binary.Write(buf, binary.LittleEndian, float32(v.Float()))
+        case reflect.Float64:
+            return binary.Write(buf, binary.LittleEndian, float64(v.Float()))
+        default:
+            // If it's a named type like driver.Ptr (alias of uint64), treat by kind underlying
+            if v.CanConvert(reflect.TypeOf(uint64(0))) {
+                return binary.Write(buf, binary.LittleEndian, uint64(v.Convert(reflect.TypeOf(uint64(0))).Uint()))
+            }
+            return fmt.Errorf("unsupported arg kind: %v", v.Kind())
+        }
+    }
 
-	ldsSize := co.WGGroupSegmentByteSize
+    var buf bytes.Buffer
 
-	if reflect.TypeOf(newKernelArgs).Kind() == reflect.Slice {
-		// From server, do nothing
-	} else {
-		kernArgStruct := reflect.ValueOf(newKernelArgs).Elem()
-		for i := 0; i < kernArgStruct.NumField(); i++ {
-			arg := kernArgStruct.Field(i).Interface()
+    if kernelArgs == nil {
+        // No args: return empty slice of appropriate size (maybe still need packet)
+        return buf.Bytes()
+    }
 
-			switch ldsPtr := arg.(type) {
-			case LocalPtr:
-				kernArgStruct.Field(i).SetUint(uint64(ldsSize))
-				ldsSize += uint32(ldsPtr)
-			}
-		}
-	}
+    rv := reflect.ValueOf(kernelArgs)
+    rt := rv.Type()
 
-	packet.GroupSegmentSize = ldsSize
+    // Case 1: direct []byte -> use as-is
+    if b, ok := kernelArgs.([]byte); ok {
+        log.Printf("prepareLocalMemory: kernelArgs is []byte len=%d", len(b))
+        return b
+    }
 
-	return newKernelArgs
+    // Case 2: []interface{} or slice of concrete types -> iterate elements
+    if rv.Kind() == reflect.Slice {
+        log.Printf("prepareLocalMemory: kernelArgs is slice kind=%v elem=%v len=%d", rt.Kind(), rt.Elem(), rv.Len())
+        for i := 0; i < rv.Len(); i++ {
+            elem := rv.Index(i)
+            // handle pointer-to-type inside slice (e.g. driver.Ptr as uint64)
+            if err := writeValue(&buf, elem); err != nil {
+                log.Printf("prepareLocalMemory: writeValue failed for element %d: %v", i, err)
+                // try to be permissive: if element is a slice/array of bytes, write raw
+                if b, ok := elem.Interface().([]byte); ok {
+                    buf.Write(b)
+                    continue
+                }
+                panic(err)
+            }
+        }
+    } else if rv.Kind() == reflect.Ptr && rv.Elem().Kind() == reflect.Struct {
+        // Case 3: pointer to struct -> iterate fields in order and write
+        log.Printf("prepareLocalMemory: kernelArgs is *struct %v", rt.Elem().Name())
+        rv = rv.Elem()
+        rt = rv.Type()
+        for i := 0; i < rv.NumField(); i++ {
+            fld := rv.Field(i)
+            if !fld.CanInterface() {
+                // unexported field — still we can try to read if addressable
+            }
+            if err := writeValue(&buf, fld); err != nil {
+                log.Printf("prepareLocalMemory: writeValue failed for field %s: %v", rt.Field(i).Name, err)
+                panic(err)
+            }
+        }
+    } else {
+        // Last resort: attempt to directly write the value
+        log.Printf("prepareLocalMemory: kernelArgs kind=%v (fallback)", rv.Kind())
+        if err := writeValue(&buf, rv); err != nil {
+            log.Printf("prepareLocalMemory: unsupported kernelArgs type: %v", rt)
+            panic(err)
+        }
+    }
+
+    out := buf.Bytes()
+    log.Printf("prepareLocalMemory: serialized kernel-args len=%d bytes", len(out))
+
+    // safety cap: refuse absurd sizes
+    const maxArgBytes = 1 << 30 // 1 GB
+    if uint64(len(out)) > uint64(maxArgBytes) {
+        log.Fatalf("prepareLocalMemory: kernel-args too large: %d bytes", len(out))
+    }
+
+    return out
 }
 
 // LaunchKernel is an easy way to run a kernel on the GCN3 simulator. It
@@ -176,7 +262,13 @@ func (d *Driver) enqueueLaunchUnifiedKernel(
 		dCoData, dKernArgData, dPacket := d.allocateGPUMemory(queue.Context, co)
 
 		packet := d.createAQLPacket(gridSize, wgSize, dCoData, dKernArgData)
-		newKernelArgs := d.prepareLocalMemory(co, kernelArgs, packet)
+		buf := new(bytes.Buffer)
+		err := binary.Write(buf, binary.LittleEndian, packet)
+		if err != nil {
+			panic(err)
+		}
+		packetBytes := buf.Bytes()
+		newKernelArgs := d.prepareLocalMemory(co, kernelArgs, packetBytes)
 
 		d.EnqueueMemCopyH2D(queue, dCoData, co.Data)
 		d.EnqueueMemCopyH2D(queue, dKernArgData, newKernelArgs)

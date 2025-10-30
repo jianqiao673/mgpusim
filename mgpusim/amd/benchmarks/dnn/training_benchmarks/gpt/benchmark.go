@@ -7,6 +7,7 @@ import (
 	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/training"
 	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/training/optimization"
 	"github.com/sarchlab/mgpusim/v4/amd/driver"
+	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/layers"
 )
 
 
@@ -53,22 +54,22 @@ func NewBenchmark(driver *driver.Driver, saveMemory bool, config Config) *Benchm
 		// TODO
 	} else {
 		b.network = training.Network{ // TODO: implement GPT model
-			// Layers: []layers.Layer{
-			// 	// Token embedding
-			// 	layers.NewEmbeddingLayer(
-			// 		"wte",
-			// 		b.to,
-			// 		b.config.VocabSize,
-			// 		b.config.NEmbd,
-			// 	),
+			Layers: []layers.Layer{
+				// Token embedding
+				layers.NewEmbeddingLayer(
+					"wte",
+					b.to,
+					b.config.VocabSize,
+					b.config.NEmbd,
+				),
 
-			// 	// Positional embedding
-			// 	layers.NewEmbeddingLayer(
-			// 		"wpe",
-			// 		b.to,
-			// 		b.config.BlockSize,
-			// 		b.config.NEmbd,
-			// 	),
+				// Positional embedding
+				layers.NewEmbeddingLayer(
+					"wpe",
+					b.to,
+					b.config.BlockSize,
+					b.config.NEmbd,
+				),
 
 			// 	// Transformer blocks (h)
 			// 	NewTransformerLayerStack(

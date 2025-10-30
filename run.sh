@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 设置默认值
-DEFAULT_PROGRAM="xor"
+DEFAULT_PROGRAM="attention"
 DEFAULT_ARGS="-timing -trace-vis"
 # DEFAULT_ARGS="-timing -trace-vis -verify"
 # DEFAULT_ARGS="-timing -trace-vis -save-memory"
@@ -38,7 +38,7 @@ fi
 mkdir -p log
 
 # 构建完整命令
-CMD="cd mgpusim/amd/samples/$PROGRAM && rm -f akita_sim_**.sqlite3 && go build && ./$PROGRAM $ARGS"
+CMD="cd mgpusim/amd/samples/$PROGRAM && rm -f akita_sim_**.sqlite3 && go run main.go $ARGS"
 
 # 打印命令（会显示在终端，不会被重定向）
 echo "Executing: $CMD" >&2

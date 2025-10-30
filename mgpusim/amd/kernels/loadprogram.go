@@ -85,7 +85,7 @@ func LoadProgramFromMemory(data []byte, kernelName string) *insts.HsaCo {
 
 	for _, symbol := range symbols {
 		if symbol.Name == kernelName {
-			offset := symbol.Value - textSection.Offset
+			offset := symbol.Value - textSection.Addr
 			hsacoData := textSectionData[offset : offset+symbol.Size]
 			hsaco := insts.NewHsaCoFromData(hsacoData)
 			symbolCopy := symbol

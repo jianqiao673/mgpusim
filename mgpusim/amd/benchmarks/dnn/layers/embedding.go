@@ -3,12 +3,13 @@ package layers
 import (
 	"fmt"
 	"math/rand"
-
+	"math"
 	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/tensor"
 )
 
 // An EmbeddingLayer implements an embedding layer.
 type EmbeddingLayer struct {
+	Name       string
 	layerIndex int
 	to         tensor.Operator
 
@@ -24,14 +25,16 @@ type EmbeddingLayer struct {
 
 // NewEmbeddingLayer creates a new embedding layer.
 func NewEmbeddingLayer(
-	index int,
+	name string,
+	layerIndex int,
 	to tensor.Operator,
 	vocabSize, embeddingDim int,
 ) *EmbeddingLayer {
 	numWeight := vocabSize * embeddingDim
-
+	layerIndex = 0 
 	l := &EmbeddingLayer{
-		layerIndex:   index,
+		Name:         name,
+		layerIndex:   layerIndex,
 		to:           to,
 		VocabSize:    vocabSize,
 		EmbeddingDim: embeddingDim,
@@ -44,8 +47,6 @@ func NewEmbeddingLayer(
 
 	fmt.Printf("[NewEmbeddingLayer-Allocate] parameters: 0x%x, weights: 0x%x\n",
 		l.parameters, l.weights)
-	fmt.Printf("[NewEmbeddingLayer-Allocate] gradients: 0x%x, weightGradients: 0x%x\n",
-		l.gradients, l.weightGradients)
 
 	return l
 }
@@ -54,9 +55,28 @@ func NewEmbeddingLayer(
 func (l *EmbeddingLayer) Randomize() {
 	numWeight := l.VocabSize * l.EmbeddingDim
 	weights := make([]float64, numWeight)
-	for i := 0; i < numWeight; i++ {
-		weights[i] = (rand.Float64() - 0.5) / float64(l.EmbeddingDim) * 2
+
+	if l.Name == "wte" {
+		// 普通词嵌入
+		for i := 0; i < numWeight; i++ {
+			weights[i] = (rand.Float64() - 0.5) / float64(l.EmbeddingDim) * 2
+		}
+		fmt.Println("[EmbeddingLayer.Randomize] Initialized token embedding (wte) randomly")
+	} else if l.Name == "wpe" {
+		// 位置嵌入使用正弦编码
+		for pos := 0; pos < l.VocabSize; pos++ {
+			for i := 0; i < l.EmbeddingDim; i++ {
+				divTerm := math.Exp(-float64(i/2)*math.Log(10000)/float64(l.EmbeddingDim))
+				if i%2 == 0 {
+					weights[pos*l.EmbeddingDim+i] = math.Sin(float64(pos) * divTerm)
+				} else {
+					weights[pos*l.EmbeddingDim+i] = math.Cos(float64(pos) * divTerm)
+				}
+			}
+		}
+		fmt.Println("[EmbeddingLayer.Randomize] Initialized position embedding (wpe) with sinusoidal encoding")
 	}
+
 	l.to.Init(l.weights, weights)
 }
 
@@ -124,13 +144,14 @@ func (l EmbeddingLayer) Gradients() tensor.Tensor {
 
 // SaveNewEmbeddingLayer creates an embedding layer with memory optimization.
 func SaveNewEmbeddingLayer(
+	name string,
 	index int,
 	to tensor.Operator,
 	vocabSize, embeddingDim int,
 ) *EmbeddingLayer {
 	numWeight := vocabSize * embeddingDim
-
 	l := &EmbeddingLayer{
+		Name:         name,
 		layerIndex:   index,
 		to:           to,
 		VocabSize:    vocabSize,

@@ -86,6 +86,7 @@ type Operator interface {
 
 // CPUOperator can process CPU tensors.
 type CPUOperator struct {
+	
 }
 
 // Create creates a new CPU tensor.

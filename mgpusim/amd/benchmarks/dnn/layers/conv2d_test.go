@@ -18,14 +18,14 @@ func tensorMatch(actual, expected tensor.Tensor) {
 	}
 }
 
-var _ = Describe("Conv2d", func() {
+var _ = Describe("Conv2d", func() { 
 	var (
 		layer *Conv2D
-		to    tensor.CPUOperator
+		to    tensor.Operator
 	)
 
 	BeforeEach(func() {
-		to = tensor.CPUOperator{}
+		to = tensor.Create()
 	})
 
 	It("should forward", func() {

@@ -13,7 +13,7 @@ type CausalSelfAttentionConfig struct {
 	NEmbd     int  // 嵌入维度
 	NHead     int  // 注意力头数
 	Bias      bool // 是否使用偏置
-	BlockSize int  // 序列长度
+	BlockSize int  // 序列长度（用于 mask）
 }
 
 // CausalSelfAttentionLayer 因果自注意力层
@@ -22,22 +22,22 @@ type CausalSelfAttentionLayer struct {
 	to         tensor.Operator
 	config     CausalSelfAttentionConfig
 
-	// 权重参数
-	cAttnWeights tensor.Tensor // QKV 投影权重 [n_embd, 3*n_embd]
-	cAttnBias    tensor.Tensor // QKV 投影偏置 [3*n_embd]
-	cProjWeights tensor.Tensor // 输出投影权重 [n_embd, n_embd]
-	cProjBias    tensor.Tensor // 输出投影偏置 [n_embd]
+	// 权重参数（参数存储布局与 transformer 常见实现一致）
+	cAttnWeights tensor.Tensor // [n_embd, 3*n_embd] or flattened accordingly
+	cAttnBias    tensor.Tensor // [3*n_embd] (optional)
+	cProjWeights tensor.Tensor // [n_embd, n_embd]
+	cProjBias    tensor.Tensor // [n_embd] (optional)
 
-	// 梯度
+	// 梯度张量（与参数相对应）
 	cAttnWeightsGrad tensor.Tensor
 	cAttnBiasGrad    tensor.Tensor
 	cProjWeightsGrad tensor.Tensor
 	cProjBiasGrad    tensor.Tensor
 
-	// 缓存用于反向传播
-	forwardInput     tensor.Tensor
-	attentionWeights tensor.Tensor
-	softmaxOutput    tensor.Tensor
+	// 前向传播缓存（用于反向或调试）
+	forwardInput     tensor.Tensor // clone of input indices/embedding (kept briefly)
+	attentionWeights tensor.Tensor // softmax(att) （保留用于检查/反向）
+	softmaxOutput    tensor.Tensor // clone of attentionWeights（如果需要）
 }
 
 // NewCausalSelfAttentionLayer 创建新的因果自注意力层
@@ -46,7 +46,7 @@ func NewCausalSelfAttentionLayer(
 	to tensor.Operator,
 	config CausalSelfAttentionConfig,
 ) *CausalSelfAttentionLayer {
-	// 检查嵌入维度是否能被头数整除
+	// 检查配置
 	if config.NEmbd%config.NHead != 0 {
 		panic(fmt.Sprintf("n_embd (%d) must be divisible by n_head (%d)",
 			config.NEmbd, config.NHead))
@@ -58,7 +58,7 @@ func NewCausalSelfAttentionLayer(
 		config:     config,
 	}
 
-	// 初始化 QKV 投影层参数
+	// 参数分配。注意：Create 的参数是 shape 列表（不同实现可能处理不同）
 	l.cAttnWeights = to.Create([]int{config.NEmbd, 3 * config.NEmbd})
 	l.cAttnWeightsGrad = to.Create([]int{config.NEmbd, 3 * config.NEmbd})
 
@@ -67,7 +67,6 @@ func NewCausalSelfAttentionLayer(
 		l.cAttnBiasGrad = to.Create([]int{3 * config.NEmbd})
 	}
 
-	// 初始化输出投影层参数
 	l.cProjWeights = to.Create([]int{config.NEmbd, config.NEmbd})
 	l.cProjWeightsGrad = to.Create([]int{config.NEmbd, config.NEmbd})
 
@@ -76,339 +75,362 @@ func NewCausalSelfAttentionLayer(
 		l.cProjBiasGrad = to.Create([]int{config.NEmbd})
 	}
 
-	fmt.Printf("[NewCausalSelfAttentionLayer] layer %d created with %d heads, %d embed dim\n",
+	fmt.Printf("[NewCausalSelfAttentionLayer] layer %d created: n_head=%d, n_embd=%d\n",
 		index, config.NHead, config.NEmbd)
 
 	return l
 }
 
-// Randomize 随机初始化参数
+// Randomize 随机初始化参数（Xavier-like）
 func (l *CausalSelfAttentionLayer) Randomize() {
-	// 使用 Xavier 初始化
+	// Xavier scale
 	xavier := math.Sqrt(2.0 / float64(l.config.NEmbd))
 
-	// 初始化 QKV 投影权重
-	cAttnData := make([]float64, l.config.NEmbd*3*l.config.NEmbd)
+	// c_attn weights: shape n_embd x 3*n_embd => length n_embd * 3*n_embd
+	n1 := l.config.NEmbd * 3 * l.config.NEmbd
+	cAttnData := make([]float64, n1)
 	for i := range cAttnData {
-		cAttnData[i] = (rand.Float64() - 0.5) * 2 * xavier
+		cAttnData[i] = (rand.Float64()*2 - 1) * xavier
 	}
 	l.to.Init(l.cAttnWeights, cAttnData)
 
-	// 初始化输出投影权重
-	cProjData := make([]float64, l.config.NEmbd*l.config.NEmbd)
+	// c_proj weights: n_embd x n_embd
+	n2 := l.config.NEmbd * l.config.NEmbd
+	cProjData := make([]float64, n2)
 	for i := range cProjData {
-		cProjData[i] = (rand.Float64() - 0.5) * 2 * xavier
+		cProjData[i] = (rand.Float64()*2 - 1) * xavier
 	}
 	l.to.Init(l.cProjWeights, cProjData)
 
-	// 初始化偏置（如果使用）
+	// biases
 	if l.config.Bias {
 		l.to.Init(l.cAttnBias, make([]float64, 3*l.config.NEmbd))
 		l.to.Init(l.cProjBias, make([]float64, l.config.NEmbd))
 	}
 }
 
-// Forward 前向传播
+// Forward 前向传播（尽量使用 Clone / Reshape / Free 以减少峰值内存）
 func (l *CausalSelfAttentionLayer) Forward(input tensor.Tensor) tensor.Tensor {
+	// 保留一份输入（用于后向或验证），但尽可能短期保留
 	l.forwardInput = l.to.Clone(input)
 
-	B, T, C := input.Size()[0], input.Size()[1], input.Size()[2]
+	// Input shape: [B, T, C]
+	B := input.Size()[0]
+	T := input.Size()[1]
+	C := input.Size()[2]
 	headSize := C / l.config.NHead
 
-	// 1. QKV 投影 [B, T, C] -> [B, T, 3*C]
-	qkv := l.computeQKV(input)
-	defer l.to.Free(qkv)
+	// === 1) QKV 投影 ===
+	// 为了使用已有的 Gemm（2D），先 reshape 为 [B*T, C]
+	in2D := l.to.Reshape(input, []int{B * T, C})
 
-	// 2. 分割 Q, K, V
-	q, k, v := l.splitQKV(qkv, B, T, C)
-	defer l.to.Free(q)
-	defer l.to.Free(k)
-	defer l.to.Free(v)
+	// qkv2D shape: [B*T, 3*C]
+	qkv2D := l.to.Gemm(false, false, 1.0, 0.0, in2D, l.cAttnWeights, l.cAttnBias)
 
-	// 3. 重塑为多头格式 [B, T, C] -> [B, T, n_head, head_size] -> [B, n_head, T, head_size]
-	q = l.reshapeToMultiHead(q, B, T, headSize)
-	k = l.reshapeToMultiHead(k, B, T, headSize)
-	v = l.reshapeToMultiHead(v, B, T, headSize)
-	defer l.to.Free(q)
-	defer l.to.Free(k)
-	defer l.to.Free(v)
-
-	// 4. 计算注意力分数: Q @ K^T / sqrt(head_size)
-	att := l.computeAttentionScores(q, k, B, T, headSize)
-	defer l.to.Free(att)
-
-	// 5. 应用因果掩码
-	att = l.applyCausalMask(att, T)
-	defer l.to.Free(att)
-
-	// 6. Softmax
-	l.attentionWeights = l.to.Softmax(att)
-	l.softmaxOutput = l.to.Clone(l.attentionWeights)
-
-	// 7. 注意力加权: att @ v
-	y := l.applyAttention(l.attentionWeights, v, B, T, headSize)
-	defer l.to.Free(y)
-
-	// 8. 重新组装多头输出 [B, n_head, T, head_size] -> [B, T, n_head, head_size] -> [B, T, C]
-	y = l.reassembleHeads(y, B, T, C)
-
-	// 9. 输出投影
-	output := l.outputProjection(y)
-
+	// 释放 reshape 的临时 in2D 以及原始 input（我们已 clone forwardInput）
+	l.to.Free(in2D)
 	l.to.Free(input)
-	return output
-}
 
-// computeQKV 计算 QKV 投影
-func (l *CausalSelfAttentionLayer) computeQKV(input tensor.Tensor) tensor.Tensor {
-	B, T, C := input.Size()[0], input.Size()[1], input.Size()[2]
-
-	// 重塑输入为 2D 以便进行矩阵乘法
-	input2D := l.to.Reshape(input, []int{B * T, C})
-	defer l.to.Free(input2D)
-
-	// 计算 QKV 投影
-	qkv2D := l.to.Gemm(false, false, 1.0, 0.0, input2D, l.cAttnWeights, l.cAttnBias)
+	// reshape 回 [B, T, 3*C]
 	qkv := l.to.Reshape(qkv2D, []int{B, T, 3 * C})
 	l.to.Free(qkv2D)
 
-	return qkv
+	// === 2) 分割 Q,K,V ===
+	// 这里为了兼容通用 operator，我们用创建拷贝的方式分割（某些 GPUOperator 可直接支持按最后一维 split）
+	q, k, v := l.splitQKV(qkv, B, T, C)
+	l.to.Free(qkv) // 释放原始 qkv
+
+	// === 3) 重塑为多头格式 ===
+	// q,k,v: [B, T, C] -> reshape to [B, T, n_head, headSize] -> transpose to [B, n_head, T, headSize]
+	q = l.reshapeToMultiHead(q, B, T, headSize)
+	k = l.reshapeToMultiHead(k, B, T, headSize)
+	v = l.reshapeToMultiHead(v, B, T, headSize)
+
+	// === 4) 计算注意力分数 ===
+	att := l.computeAttentionScores(q, k, B, T, headSize)
+
+	// q,k 可释放（不再需要）
+	l.to.Free(q)
+	l.to.Free(k)
+
+	// === 5) apply causal mask ===
+	attMasked := l.applyCausalMask(att, T)
+	l.to.Free(att)
+
+	// === 6) softmax ===
+	l.attentionWeights = l.to.Softmax(attMasked)
+	// 备份 softmax 结果（如果需要在 backward 用到）
+	l.softmaxOutput = l.to.Clone(l.attentionWeights) // clone 一份便于后向
+	l.to.Free(attMasked)
+
+	// === 7) attention-weighted sum: att @ v ===
+	y := l.applyAttention(l.attentionWeights, v, B, T, headSize)
+	l.to.Free(v)
+	l.to.Free(l.attentionWeights) // 已经 clone 了一份放在 softmaxOutput
+
+	// === 8) reassemble heads ===
+	y = l.reassembleHeads(y, B, T, C)
+
+	// === 9) output projection ===
+	out := l.outputProjection(y)
+	l.to.Free(y)
+
+	// 返回最终结果（不释放 forwardInput / softmaxOutput，这些由 caller/backward 管理）
+	return out
 }
 
-// splitQKV 分割 QKV
+// splitQKV 将 qkv ([B,T,3*C]) 拆分为 q, k, v ([B,T,C] each)
+// 说明：通用实现会将数据复制到新张量中（兼容 CPUOperator）。若 GPUOperator 提供按最后维度切片而不拷贝的能力，可以替换这里的实现以节省内存。
 func (l *CausalSelfAttentionLayer) splitQKV(qkv tensor.Tensor, B, T, C int) (q, k, v tensor.Tensor) {
-	// 手动分割 QKV
-	qkvData := qkv.Vector()
+	// 将 qkv 转为扁平向量并拷贝为三个独立张量
+	qkvData := qkv.Vector() // flatten data
 
 	qData := make([]float64, B*T*C)
 	kData := make([]float64, B*T*C)
 	vData := make([]float64, B*T*C)
 
 	for i := 0; i < B*T; i++ {
-		copy(qData[i*C:(i+1)*C], qkvData[i*3*C:i*3*C+C])
-		copy(kData[i*C:(i+1)*C], qkvData[i*3*C+C:i*3*C+2*C])
-		copy(vData[i*C:(i+1)*C], qkvData[i*3*C+2*C:(i+1)*3*C])
+		// 每个位置有 3*C 的数据： [i*3*C : i*3*C + 3*C)
+		base := i * 3 * C
+		copy(qData[i*C:(i+1)*C], qkvData[base:base+C])
+		copy(kData[i*C:(i+1)*C], qkvData[base+C:base+2*C])
+		copy(vData[i*C:(i+1)*C], qkvData[base+2*C:base+3*C])
 	}
 
 	q = l.to.CreateWithData(qData, []int{B, T, C}, "q")
 	k = l.to.CreateWithData(kData, []int{B, T, C}, "k")
 	v = l.to.CreateWithData(vData, []int{B, T, C}, "v")
-
-	return q, k, v
+	return
 }
 
-// reshapeToMultiHead 重塑为多头格式
+// reshapeToMultiHead: [B,T,C] -> [B,T,n_head,headSize] -> transpose -> [B,n_head,T,headSize]
 func (l *CausalSelfAttentionLayer) reshapeToMultiHead(t tensor.Tensor, B, T, headSize int) tensor.Tensor {
-	// [B, T, C] -> [B, T, n_head, head_size] -> [B, n_head, T, head_size]
-	multiHead := l.to.Reshape(t, []int{B, T, l.config.NHead, headSize})
-	transposed := l.to.Transpose(multiHead, []int{0, 2, 1, 3})
-	l.to.Free(multiHead)
-	return transposed
+	// reshape -> [B, T, n_head, headSize]
+	r1 := l.to.Reshape(t, []int{B, T, l.config.NHead, headSize})
+	// transpose (0,2,1,3) -> [B, n_head, T, headSize]
+	out := l.to.Transpose(r1, []int{0, 2, 1, 3})
+	l.to.Free(r1)
+	l.to.Free(t)
+	return out
 }
 
-// computeAttentionScores 计算注意力分数
+// computeAttentionScores: q @ k^T / sqrt(headSize) -> [B, n_head, T, T]
 func (l *CausalSelfAttentionLayer) computeAttentionScores(q, k tensor.Tensor, B, T, headSize int) tensor.Tensor {
-	// 转置 K: [B, n_head, T, head_size] -> [B, n_head, head_size, T]
+	// kT: [B, n_head, headSize, T]
 	kT := l.to.Transpose(k, []int{0, 1, 3, 2})
 	defer l.to.Free(kT)
 
-	// 计算 Q @ K^T: [B, n_head, T, head_size] @ [B, n_head, head_size, T] -> [B, n_head, T, T]
+	// batch matmul: [B, n_head, T, headSize] @ [B, n_head, headSize, T] -> [B, n_head, T, T]
 	att := l.batchMatMul4D(q, kT)
 
-	// 缩放: / sqrt(head_size)
+	// scale
 	scale := 1.0 / math.Sqrt(float64(headSize))
-	scaledAtt := l.scaleTensor(att, scale)
+	scaled := l.scaleTensor(att, scale)
 	l.to.Free(att)
-
-	return scaledAtt
+	return scaled
 }
 
-// batchMatMul4D 4D 批量矩阵乘法
+// batchMatMul4D: 使用 reshape->Gemm->reshape 的方式计算批量 4D 矩阵乘法
+// a: [B, nHead, T, M], b: [B, nHead, M, N] => out: [B, nHead, T, N]
 func (l *CausalSelfAttentionLayer) batchMatMul4D(a, b tensor.Tensor) tensor.Tensor {
 	aSize := a.Size()
+	B, nHead, T, M := aSize[0], aSize[1], aSize[2], aSize[3]
+	// b size: [B, nHead, M, N]
+	N := b.Size()[3]
+	// 逐 batch/head 计算
+	outSlices := make([]tensor.Tensor, 0, B*nHead)
+	for bIdx := 0; bIdx < B; bIdx++ {
+		for h := 0; h < nHead; h++ {
+			// extract a_sub: [T, M] from a
+			a_sub := l.to.Slice(a, ((bIdx*nHead+h)*T)*M, ((bIdx*nHead+h+1)*T)*M) // flattened slice
+			a_sub2 := l.to.Reshape(a_sub, []int{T, M})
+			// extract b_sub: [M, N] from b
+			b_sub := l.to.Slice(b, ((bIdx*nHead+h)*M)*N, ((bIdx*nHead+h+1)*M)*N)
+			b_sub2 := l.to.Reshape(b_sub, []int{M, N})
 
-	B, nHead, T, headSize := aSize[0], aSize[1], aSize[2], aSize[3]
+			// out_sub = a_sub2 @ b_sub2 -> [T, N]
+			zero := l.to.Zeros([]int{T, N})
+			out_sub := l.to.Gemm(false, false, 1.0, 0.0, a_sub2, b_sub2, zero)
 
-	// 重塑为 2D 以便使用 Gemm
-	a2D := l.to.Reshape(a, []int{B * nHead * T, headSize})
-	b2D := l.to.Reshape(b, []int{B * nHead * headSize, T})
+			// reshape to [1,1,T,N] later合并
+			outSlices = append(outSlices, l.to.Reshape(out_sub, []int{1, 1, T, N}))
 
-	// 计算矩阵乘法
-	result2D := l.to.Gemm(false, false, 1.0, 0.0, a2D, b2D, l.to.Zeros([]int{B * nHead * T, T}))
-
-	// 重塑回 4D
-	result := l.to.Reshape(result2D, []int{B, nHead, T, T})
-
-	l.to.Free(a2D)
-	l.to.Free(b2D)
-	l.to.Free(result2D)
-
-	return result
-}
-
-// scaleTensor 缩放张量
-func (l *CausalSelfAttentionLayer) scaleTensor(t tensor.Tensor, scale float64) tensor.Tensor {
-	data := t.Vector()
-	scaledData := make([]float64, len(data))
-
-	for i := range data {
-		scaledData[i] = data[i] * scale
-	}
-
-	return l.to.CreateWithData(scaledData, t.Size(), "scaled")
-}
-
-// applyCausalMask 应用因果掩码
-func (l *CausalSelfAttentionLayer) applyCausalMask(att tensor.Tensor, T int) tensor.Tensor {
-	mask := l.createCausalMask(T)
-	defer l.to.Free(mask)
-
-	return l.applyCausalMaskToAttention(att, mask, T)
-}
-
-// createCausalMask 创建因果掩码
-func (l *CausalSelfAttentionLayer) createCausalMask(T int) tensor.Tensor {
-	// 创建下三角矩阵 [1, 1, T, T]
-	maskData := make([]float64, T*T)
-	for i := 0; i < T; i++ {
-		for j := 0; j < T; j++ {
-			if j > i { // 上三角部分为 -inf，下三角部分为 0
-				maskData[i*T+j] = -1e9
-			} else {
-				maskData[i*T+j] = 0
-			}
+			// free intermediates
+			l.to.Free(a_sub)
+			l.to.Free(a_sub2)
+			l.to.Free(b_sub)
+			l.to.Free(b_sub2)
+			l.to.Free(zero)
+			l.to.Free(out_sub)
 		}
 	}
 
-	return l.to.CreateWithData(maskData, []int{1, 1, T, T}, "causal_mask")
+	// concat outSlices into [B, nHead, T, N]
+	// 将 slices 按顺序合并（这里用最简单的方法：收集各 slice 的 vector，拼接然后 CreateWithData）
+	totalElems := B * nHead * T * N
+	all := make([]float64, 0, totalElems)
+	for _, s := range outSlices {
+		all = append(all, s.Vector()...)
+		l.to.Free(s)
+	}
+	out := l.to.CreateWithData(all, []int{B, nHead, T, N}, "att_batch")
+	return out
 }
 
-// applyCausalMaskToAttention 应用因果掩码到注意力分数
-func (l *CausalSelfAttentionLayer) applyCausalMaskToAttention(att, mask tensor.Tensor, T int) tensor.Tensor {
+// scaleTensor 元素缩放
+func (l *CausalSelfAttentionLayer) scaleTensor(t tensor.Tensor, scale float64) tensor.Tensor {
+	data := t.Vector()
+	out := make([]float64, len(data))
+	for i := range data {
+		out[i] = data[i] * scale
+	}
+	return l.to.CreateWithData(out, t.Size(), "scaled")
+}
+
+// applyCausalMask: 使用下三角 mask，将上三角位置设为 -inf (用一个很小的负数)
+func (l *CausalSelfAttentionLayer) applyCausalMask(att tensor.Tensor, T int) tensor.Tensor {
+	// 创建 causal mask [1,1,T,T]
+	maskData := make([]float64, T*T)
+	for i := 0; i < T; i++ {
+		for j := 0; j < T; j++ {
+			if j > i {
+				maskData[i*T+j] = -1e9
+			} else {
+				maskData[i*T+j] = 0.0
+			}
+		}
+	}
+	mask := l.to.CreateWithData(maskData, []int{1, 1, T, T}, "causal_mask")
+	// 广播并相加
 	attSize := att.Size()
 	B, nHead := attSize[0], attSize[1]
-
-	// 广播掩码到与注意力分数相同的形状
-	broadcastMask := l.broadcastMask(mask, B, nHead, T)
-	defer l.to.Free(broadcastMask)
-
-	// 应用掩码: att + mask
-	maskedAtt := l.addTensors(att, broadcastMask)
-
-	return maskedAtt
+	broadcast := l.broadcastMask(mask, B, nHead, T)
+	l.to.Free(mask)
+	out := l.addTensors(att, broadcast)
+	l.to.Free(broadcast)
+	return out
 }
 
-// broadcastMask 广播掩码
+// broadcastMask: 把 mask 扩展到 [B, nHead, T, T]
 func (l *CausalSelfAttentionLayer) broadcastMask(mask tensor.Tensor, B, nHead, T int) tensor.Tensor {
-	maskData := mask.Vector()
-	broadcastData := make([]float64, B*nHead*T*T)
-
+	m := mask.Vector() // length T*T
+	outData := make([]float64, B*nHead*T*T)
 	for b := 0; b < B; b++ {
 		for h := 0; h < nHead; h++ {
 			for i := 0; i < T; i++ {
 				for j := 0; j < T; j++ {
 					idx := ((b*nHead+h)*T+i)*T + j
-					broadcastData[idx] = maskData[i*T+j]
+					outData[idx] = m[i*T+j]
 				}
 			}
 		}
 	}
-
-	return l.to.CreateWithData(broadcastData, []int{B, nHead, T, T}, "broadcast_mask")
+	return l.to.CreateWithData(outData, []int{B, nHead, T, T}, "broadcast_mask")
 }
 
-// addTensors 张量加法
+// addTensors 元素相加
 func (l *CausalSelfAttentionLayer) addTensors(a, b tensor.Tensor) tensor.Tensor {
-	aData := a.Vector()
-	bData := b.Vector()
-	resultData := make([]float64, len(aData))
+	ad := a.Vector()
+	bd := b.Vector()
+	res := make([]float64, len(ad))
+	for i := range ad {
+		res[i] = ad[i] + bd[i]
+	}
+	return l.to.CreateWithData(res, a.Size(), "added")
+}
 
-	for i := range aData {
-		resultData[i] = aData[i] + bData[i]
+// applyAttention: att [B,n_head,T,T] @ v [B,n_head,T,headSize] -> [B,n_head,T,headSize]
+func (l *CausalSelfAttentionLayer) applyAttention(att, v tensor.Tensor, B, T, headSize int) tensor.Tensor {
+	// reuse batchMatMul4D (att is [B,nHead,T,T], v is [B,nHead,T,headSize])
+	// Convert v to shape [B,nHead, T, headSize] already is.
+	// For multiplication, consider v as [B,nHead,T,headSize] and compute att @ v
+	// we transpose v to [B,nHead, headSize, T]? actually we need att @ v: (T x T) @ (T x headSize) -> (T x headSize)
+
+	// We can implement by looping each (B, h) block (similar to batchMatMul4D approach)
+	Bn := att.Size()[0]
+	nHead := att.Size()[1]
+	N := headSize
+
+	outSlices := make([]tensor.Tensor, 0, Bn*nHead)
+	for bIdx := 0; bIdx < Bn; bIdx++ {
+		for h := 0; h < nHead; h++ {
+			att_sub := l.to.Slice(att, ((bIdx*nHead+h)*T)*T, ((bIdx*nHead+h+1)*T)*T)
+			att2 := l.to.Reshape(att_sub, []int{T, T})
+			v_sub := l.to.Slice(v, ((bIdx*nHead+h)*T)*N, ((bIdx*nHead+h+1)*T)*N)
+			v2 := l.to.Reshape(v_sub, []int{T, N})
+
+			zero := l.to.Zeros([]int{T, N})
+			out_sub := l.to.Gemm(false, false, 1.0, 0.0, att2, v2, zero)
+			outSlices = append(outSlices, l.to.Reshape(out_sub, []int{1, 1, T, N}))
+
+			// free temporaries
+			l.to.Free(att_sub)
+			l.to.Free(att2)
+			l.to.Free(v_sub)
+			l.to.Free(v2)
+			l.to.Free(zero)
+			l.to.Free(out_sub)
+		}
 	}
 
-	return l.to.CreateWithData(resultData, a.Size(), "added")
+	// 合并
+	totalElems := Bn * nHead * T * N
+	all := make([]float64, 0, totalElems)
+	for _, s := range outSlices {
+		all = append(all, s.Vector()...)
+		l.to.Free(s)
+	}
+	out := l.to.CreateWithData(all, []int{Bn, nHead, T, N}, "att_v")
+	return out
 }
 
-// applyAttention 应用注意力权重
-func (l *CausalSelfAttentionLayer) applyAttention(att, v tensor.Tensor, B, T, headSize int) tensor.Tensor {
-	// [B, n_head, T, T] @ [B, n_head, T, head_size] -> [B, n_head, T, head_size]
-	return l.batchMatMul4D(att, v)
-}
-
-// reassembleHeads 重新组装多头输出
+// reassembleHeads: [B,n_head,T,headSize] -> transpose -> [B,T,C]
 func (l *CausalSelfAttentionLayer) reassembleHeads(y tensor.Tensor, B, T, C int) tensor.Tensor {
-	// [B, n_head, T, head_size] -> [B, T, n_head, head_size] -> [B, T, C]
+	// transpose [B,T,n_head,headSize] desired; currently y is [B,n_head,T,headSize]
 	transposed := l.to.Transpose(y, []int{0, 2, 1, 3})
-	reassembled := l.to.Reshape(transposed, []int{B, T, C})
+	reshaped := l.to.Reshape(transposed, []int{B, T, C})
 	l.to.Free(transposed)
-	return reassembled
+	l.to.Free(y)
+	return reshaped
 }
 
-// outputProjection 输出投影
+// outputProjection: y [B,T,C] -> reshape and gemm with cProjWeights
 func (l *CausalSelfAttentionLayer) outputProjection(y tensor.Tensor) tensor.Tensor {
 	B, T, C := y.Size()[0], y.Size()[1], y.Size()[2]
-
-	// 重塑为 2D 以便进行矩阵乘法
 	y2D := l.to.Reshape(y, []int{B * T, C})
-	defer l.to.Free(y2D)
-
-	// 输出投影
-	output2D := l.to.Gemm(false, false, 1.0, 0.0, y2D, l.cProjWeights, l.cProjBias)
-	output := l.to.Reshape(output2D, []int{B, T, C})
-	l.to.Free(output2D)
-
-	return output
+	out2D := l.to.Gemm(false, false, 1.0, 0.0, y2D, l.cProjWeights, l.cProjBias)
+	l.to.Free(y2D)
+	out := l.to.Reshape(out2D, []int{B, T, C})
+	l.to.Free(out2D)
+	return out
 }
 
-// Backward 反向传播
+// Backward: 简化实现（占位），清理缓存并返回输入梯度占位
 func (l *CausalSelfAttentionLayer) Backward(input tensor.Tensor) tensor.Tensor {
-	// 清空梯度
+	// 清空梯度张量（占位）
 	l.to.Clear(l.cAttnWeightsGrad)
-	l.to.Clear(l.cAttnBiasGrad)
 	l.to.Clear(l.cProjWeightsGrad)
-	l.to.Clear(l.cProjBiasGrad)
-
-	// 计算梯度
-	l.calculateGradients(input)
-
-	var output tensor.Tensor
-	if l.layerIndex > 0 {
-		output = l.calculateInputGradients(input)
+	if l.config.Bias {
+		l.to.Clear(l.cAttnBiasGrad)
+		l.to.Clear(l.cProjBiasGrad)
 	}
 
-	// 清理缓存
+	// placeholder: 复杂反向传播在此省略（需要完整实现 QKV、softmax、GEMM 的反向）
+	fmt.Printf("[CausalSelfAttentionLayer.Backward] layer %d: placeholder gradient computation\n", l.layerIndex)
+
+	// 返回与 forwardInput sameshape 的 zeros 作为输入梯度
+	inShape := l.forwardInput.Size()
+	out := l.to.Zeros(inShape)
+
+	// 释放缓存
 	l.to.Free(l.forwardInput)
-	l.to.Free(l.attentionWeights)
 	l.to.Free(l.softmaxOutput)
 	l.to.Free(input)
 
-	return output
+	return out
 }
 
-// calculateGradients 计算权重梯度
-func (l *CausalSelfAttentionLayer) calculateGradients(input tensor.Tensor) {
-	// 这里需要实现完整的反向传播逻辑
-	// 由于注意力机制的反向传播较复杂，这里简化实现
-
-	// 实际实现中需要计算：
-	// 1. 输出投影层的梯度
-	// 2. 注意力权重的梯度
-	// 3. QKV 投影层的梯度
-	// 这里使用占位符实现
-	fmt.Printf("Calculating gradients for causal self-attention layer %d\n", l.layerIndex)
-}
-
-// calculateInputGradients 计算输入梯度
-func (l *CausalSelfAttentionLayer) calculateInputGradients(input tensor.Tensor) tensor.Tensor {
-	// 计算对输入的梯度
-	// 这里简化实现，实际需要完整的反向传播
-	inputShape := l.forwardInput.Size()
-	output := l.to.Zeros(inputShape)
-	return output
-}
-
-// Parameters 返回所有参数
+// Parameters 返回参数集合（便于优化器处理）
 func (l *CausalSelfAttentionLayer) Parameters() []tensor.Tensor {
 	params := []tensor.Tensor{l.cAttnWeights, l.cProjWeights}
 	if l.config.Bias {
@@ -417,7 +439,7 @@ func (l *CausalSelfAttentionLayer) Parameters() []tensor.Tensor {
 	return params
 }
 
-// Gradients 返回所有梯度
+// Gradients 返回对应梯度集合
 func (l *CausalSelfAttentionLayer) Gradients() []tensor.Tensor {
 	grads := []tensor.Tensor{l.cAttnWeightsGrad, l.cProjWeightsGrad}
 	if l.config.Bias {
@@ -428,18 +450,15 @@ func (l *CausalSelfAttentionLayer) Gradients() []tensor.Tensor {
 
 // GetOutputShape 获取输出形状
 func (l *CausalSelfAttentionLayer) GetOutputShape(inputShape []int) []int {
-	// 输入: [batch_size, seq_len, n_embd]
-	// 输出: [batch_size, seq_len, n_embd] (相同形状)
+	// 输入: [batch, seq, n_embd] -> 输出: 相同形状
 	return []int{inputShape[0], inputShape[1], l.config.NEmbd}
 }
 
-// SetWeights 设置权重（用于加载预训练模型）
+// SetWeights / SetBiases 用于加载预训练参数（可选）
 func (l *CausalSelfAttentionLayer) SetWeights(cAttnWeights, cProjWeights []float64) {
 	l.to.Init(l.cAttnWeights, cAttnWeights)
 	l.to.Init(l.cProjWeights, cProjWeights)
 }
-
-// SetBiases 设置偏置（用于加载预训练模型）
 func (l *CausalSelfAttentionLayer) SetBiases(cAttnBias, cProjBias []float64) {
 	if l.config.Bias {
 		l.to.Init(l.cAttnBias, cAttnBias)

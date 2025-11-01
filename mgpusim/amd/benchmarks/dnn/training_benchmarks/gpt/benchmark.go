@@ -58,6 +58,7 @@ func NewBenchmark(driver *driver.Driver, saveMemory bool, config Config) *Benchm
 				// Token embedding
 				layers.NewEmbeddingLayer(
 					"wte",
+					0,
 					b.to,
 					b.config.VocabSize,
 					b.config.NEmbd,
@@ -66,6 +67,7 @@ func NewBenchmark(driver *driver.Driver, saveMemory bool, config Config) *Benchm
 				// Positional embedding
 				layers.NewEmbeddingLayer(
 					"wpe",
+					0,
 					b.to,
 					b.config.BlockSize,
 					b.config.NEmbd,

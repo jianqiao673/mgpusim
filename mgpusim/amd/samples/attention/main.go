@@ -10,9 +10,9 @@ import (
 // 定义命令行参数
 var (
 	batchSize  = flag.Int("batch", 2, "Batch size")
-	seqLen     = flag.Int("seqlen", 1024, "Sequence length")
-	embedDim   = flag.Int("embed", 512, "Embedding dimension")
-	numHeads   = flag.Int("heads", 8, "Number of attention heads")
+	seqLen     = flag.Int("seqlen", 50, "Sequence length")
+	embedDim   = flag.Int("embed", 8, "Embedding dimension")
+	numHeads   = flag.Int("heads", 4, "Number of attention heads")
 	useLazy    = flag.Bool("lazy", false, "Use lazy memory allocation")
 	useUnified = flag.Bool("unified", false, "Use unified memory")
 )

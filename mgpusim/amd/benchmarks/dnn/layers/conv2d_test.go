@@ -25,7 +25,7 @@ var _ = Describe("Conv2d", func() {
 	)
 
 	BeforeEach(func() {
-		to = tensor.Create()
+		to = &tensor.CPUOperator{}
 	})
 
 	It("should forward", func() {

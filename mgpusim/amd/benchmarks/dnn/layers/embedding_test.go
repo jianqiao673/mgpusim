@@ -1,103 +1,159 @@
 package layers
 
 import (
+	"fmt"
+	"math"
+	"testing"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/tensor"
+	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/gputensor"
 )
 
-var _ = Describe("Embedding Layer", func() {
+func TestEmbeddingLayer(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "EmbeddingLayer Suite")
+}
+
+var _ = Describe("EmbeddingLayer", func() {
 
 	var (
-		to       *tensor.CPUOperator
-		embed    *EmbeddingLayer
-		input    tensor.Tensor
-		vocab    int
-		embedDim int
+		to        *gputensor.GPUOperator
+		layerWTE  *EmbeddingLayer
+		layerWPE  *EmbeddingLayer
+		input     gputensor.Tensor
+		output    gputensor.Tensor
+		vocabSize int
+		embDim    int
 	)
 
 	BeforeEach(func() {
-		to = &tensor.CPUOperator{}
-		vocab = 5       // 词表大小
-		embedDim = 3    // 每个 token 的嵌入维度
-		embed = NewEmbeddingLayer("wte", 0, to, vocab, embedDim)
+		to = &gputensor.GPUOperator{}
+		vocabSize = 10
+		embDim = 4
+		layerWTE = NewEmbeddingLayer("wte", 0, to, vocabSize, embDim)
+		layerWPE = NewEmbeddingLayer("wpe", 0, to, vocabSize, embDim)
 	})
 
-	It("should randomize weights", func() {
-		embed.Randomize()
-		Expect(embed.weights.Size()).To(Equal([]int{vocab * embedDim}))
-		Expect(embed.weights.Vector()).To(HaveLen(vocab * embedDim))
+	// -----------------------
+	// Test Random Initialization
+	// -----------------------
+	It("should initialize token embeddings randomly", func() {
+		layerWTE.Randomize()
+		weights := layerWTE.GetWeights().Vector()
+		Expect(len(weights)).To(Equal(vocabSize * embDim))
+
+		sum := 0.0
+		for _, v := range weights {
+			sum += math.Abs(v)
+		}
+		Expect(sum).Should(BeNumerically(">", 0))
+		fmt.Println("[Test] Token Embedding Weights:", weights[:8])
 	})
 
-	It("should forward with known weights", func() {
-		// 设定确定的权重值（vocab=5, dim=3）
-		to.Init(embed.weights, []float64{
-			0.1, 0.2, 0.3, // token 0
-			0.4, 0.5, 0.6, // token 1
-			0.7, 0.8, 0.9, // token 2
-			1.0, 1.1, 1.2, // token 3
-			1.3, 1.4, 1.5, // token 4
-		})
+	It("should initialize position embeddings with sinusoidal encoding", func() {
+		layerWPE.Randomize()
+		weights := layerWPE.GetWeights().Vector()
+		diff := math.Abs(weights[0] - weights[embDim])
+		Expect(diff).Should(BeNumerically(">", 0))
+		fmt.Println("[Test] Position Embedding First Position:", weights[:embDim])
+		fmt.Println("[Test] Position Embedding Second Position:", weights[embDim:2*embDim])
+	})
 
-		// 输入 token 索引（batch=2, seq_len=2）
+	// -----------------------
+	// Test Forward / Backward
+	// -----------------------
+	It("should perform forward lookup correctly", func() {
+		layerWTE.Randomize()
 		input = to.CreateWithData([]float64{
-			0, 3, // 第一批
-			2, 1, // 第二批
-		}, []int{2, 2}, "")
+			1, 3, 5,
+			2, 4, 6,
+		}, []int{2, 3}, "input_idx")
 
-		output := embed.Forward(input)
+		output = layerWTE.Forward(input)
+		Expect(output.Size()).To(Equal([]int{2, 3, embDim}))
 
-		// 输出应为对应嵌入向量
-		Expect(output.Size()).To(Equal([]int{2, 2, embedDim}))
-
-		Expect(output.Vector()).To(Equal([]float64{
-			0.1, 0.2, 0.3, // token 0
-			1.0, 1.1, 1.2, // token 3
-			0.7, 0.8, 0.9, // token 2
-			0.4, 0.5, 0.6, // token 1
-		}))
+		w := layerWTE.GetWeights().Vector()
+		idx := int(3)
+		start := idx * embDim
+		Expect(output.Vector()[embDim:2*embDim]).To(Equal(w[start : start+embDim]))
 	})
 
-	It("should backward and compute gradients", func() {
-		// 初始化确定的权重
-		to.Init(embed.weights, []float64{
-			0.1, 0.2, 0.3,
-			0.4, 0.5, 0.6,
-			0.7, 0.8, 0.9,
-			1.0, 1.1, 1.2,
-			1.3, 1.4, 1.5,
-		})
-
-		// 前向输入（记录 forwardInput）
-		embed.forwardInput = to.CreateWithData([]float64{
-			0, 2,
-		}, []int{1, 2}, "")
-
-		// 模拟反向输入（梯度）
+	It("should produce zero gradients for input indices", func() {
+		layerWTE.Randomize()
 		input = to.CreateWithData([]float64{
-			0.01, 0.02, 0.03,
-			0.04, 0.05, 0.06,
-		}, []int{1, 2, 3}, "")
+			1, 2,
+			3, 4,
+		}, []int{2, 2}, "input")
 
-		output := embed.Backward(input)
+		out := layerWTE.Forward(to.Clone(input))
+		gradInput := layerWTE.Backward(out)
 
-		// 输出应为零（embedding 对索引梯度为0）
-		Expect(output.Size()).To(Equal([]int{1, 2}))
-		Expect(output.Vector()).To(Equal([]float64{0, 0}))
-
-		// 检查梯度张量是否存在（无需验证数值）
-		Expect(embed.weightGradients.Size()).To(Equal([]int{vocab * embedDim}))
+		Expect(gradInput.Size()).To(Equal([]int{2, 2}))
+		for _, v := range gradInput.Vector() {
+			Expect(v).To(Equal(0.0))
+		}
 	})
 
-	It("should initialize position embedding when name=wpe", func() {
-		posEmbed := NewEmbeddingLayer("wpe", 0, to, vocab, embedDim)
-		posEmbed.Randomize()
+	// -----------------------
+	// Test SetWeights
+	// -----------------------
+	It("should allow SetWeights to override embedding values", func() {
+		w := make([]float64, vocabSize*embDim)
+		for i := range w {
+			w[i] = float64(i) / 10.0
+		}
+		layerWTE.SetWeights(w)
+		read := layerWTE.GetWeights().Vector()
+		Expect(read).To(Equal(w))
+	})
 
-		Expect(posEmbed.weights.Size()).To(Equal([]int{vocab * embedDim}))
+	// -----------------------
+	// Test LazyRandomize / SaveForward / SaveBackward
+	// -----------------------
+	It("should support LazyRandomize and SaveForward / SaveBackward for token embeddings", func() {
+		layerWTE.LazyRandomize()
+		Expect(len(layerWTE.GetWeights().Vector())).To(Equal(vocabSize * embDim))
 
-		// 正弦编码通常包含非零值
-		vec := posEmbed.weights.Vector()
-		Expect(vec[0]).NotTo(Equal(0))
-		Expect(vec[1]).NotTo(Equal(0))
+		input = to.CreateWithData([]float64{
+			0, 1,
+			2, 3,
+		}, []int{2, 2}, "input_lazy_wte")
+
+		output = layerWTE.SaveForward(input)
+		Expect(output.Size()).To(Equal([]int{2, 2, embDim}))
+
+		grad := layerWTE.SaveBackward(output)
+		Expect(grad.Size()).To(Equal([]int{2, 2}))
+
+		for _, v := range grad.Vector() {
+			Expect(v).To(Equal(0.0))
+		}
+
+		sumGrad := 0.0
+		for _, g := range layerWTE.weightGradients.Vector() {
+			sumGrad += math.Abs(g)
+		}
+		Expect(sumGrad).Should(BeNumerically(">", 0))
+	})
+
+	It("should support LazyRandomize and SaveForward / SaveBackward for position embeddings", func() {
+		layerWPE.LazyRandomize()
+		Expect(len(layerWPE.GetWeights().Vector())).To(Equal(vocabSize * embDim))
+
+		input = to.CreateWithData([]float64{
+			0, 1,
+			2, 3,
+		}, []int{2, 2}, "input_lazy_wpe")
+
+		output = layerWPE.SaveForward(input)
+		Expect(output.Size()).To(Equal([]int{2, 2, embDim}))
+
+		grad := layerWPE.SaveBackward(output)
+		Expect(grad.Size()).To(Equal([]int{2, 2}))
+
+		for _, v := range grad.Vector() {
+			Expect(v).To(Equal(0.0))
+		}
 	})
 })

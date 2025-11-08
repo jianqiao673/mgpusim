@@ -16,7 +16,7 @@ func main() {
 		BlockSize: 3,
 		VocabSize: 2,
 		NEmbd:     16,
-		NLayer:    4,
+		NLayer:    1,
 		NHeads:    4,
 		Bias:      false,
 	})

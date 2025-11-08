@@ -61,11 +61,11 @@ func NewBenchmark(driver *driver.Driver) *Benchmark {
 	b.driver = driver
 	b.context = driver.Init()
 
-	// 详细检查HSACO文件（调试信息）
+	// Detailed HSACO file inspection for debugging
 	log.Printf("=== HSACO File Analysis ===")
 	log.Printf("File size: %d bytes", len(hsacoBytes))
 
-	// 检查ELF魔数
+	// Check ELF magic header
 	if len(hsacoBytes) >= 4 {
 		magic := string(hsacoBytes[0:4])
 		log.Printf("ELF magic: %x (%s)", hsacoBytes[0:4], magic)
@@ -74,7 +74,7 @@ func NewBenchmark(driver *driver.Driver) *Benchmark {
 		}
 	}
 
-	// 检查文件头信息
+	// Check ELF header information
 	if len(hsacoBytes) >= 64 {
 		// ELF class (32-bit or 64-bit)
 		elfClass := hsacoBytes[4]
@@ -89,7 +89,7 @@ func NewBenchmark(driver *driver.Driver) *Benchmark {
 		log.Printf("ELF type: %d", elfType)
 	}
 
-	// 尝试加载程序
+	// Attempt to load the program
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("PANIC during HSACO loading: %v", r)
@@ -112,7 +112,7 @@ func NewBenchmark(driver *driver.Driver) *Benchmark {
 
 	b.gpus = []int{0}
 
-	// 默认参数（可以通过 SetParameters 修改）
+	// Default parameters (can be modified via SetParameters)
 	b.VocabSize = 100
 	b.EmbeddingDim = 64
 	b.BatchSize = 16
@@ -191,19 +191,19 @@ func (b *Benchmark) initMem() {
 	b.weightData = make([]float32, weightSize)
 	b.outputData = make([]float32, outputSize)
 
-	// 初始化输入数据
+	// Initialize input data
 	for i := 0; i < inputSize; i++ {
 		b.inputData[i] = int32(i % b.VocabSize)
 	}
 
-	// 初始化权重数据
+	// Initialize weight data
 	for i := 0; i < weightSize; i++ {
 		b.weightData[i] = float32(i%10) * 0.1
 	}
 
 	b.driver.MemCopyH2D(b.context, b.gInputData, b.inputData)
 	b.driver.MemCopyH2D(b.context, b.gWeightData, b.weightData)
-	// 输出由 kernel 写回，不需要初始化到 device
+	// Output is written back by the kernel, no need to initialize on device
 }
 
 func (b *Benchmark) exec() {
@@ -215,7 +215,7 @@ func (b *Benchmark) exec() {
 
 	totalElements := b.BatchSize * b.SeqLen
 
-	// 均匀分配 totalElements 到多个 GPU（base + remainder）
+	// Distribute totalElements evenly across multiple GPUs (base + remainder)
 	numGpus := len(b.gpus)
 	if numGpus == 0 {
 		numGpus = 1
@@ -262,7 +262,7 @@ func (b *Benchmark) exec() {
 		}
 
 		// Sanity check to prevent accidental huge allocations
-		const maxAllowed = uint64(1 << 30) // 1 GB; 调试时可以设小些比如 256MB (1<<28)
+		const maxAllowed = uint64(1 << 30) // 1 GB
 		if expectedOutputBytes > maxAllowed {
 			log.Fatalf("Refusing to launch kernel: expected output bytes too large: %d (> %d). Reduce batch/seq/dim.", expectedOutputBytes, maxAllowed)
 		}
@@ -274,7 +274,7 @@ func (b *Benchmark) exec() {
 			b.hsaco,
 			[3]uint32{uint32(numElements), 1, 1},
 			[3]uint16{64, 1, 1},
-			&kernArg, // <- 必须传指针（driver 通过反射期望 struct pointer）
+			&kernArg, // pass pointer to struct
 		)
 
 		log.Printf("DEBUG: launch returned dCoData=0x%x dKernArgData=0x%x dPacket=0x%x", dCoData, dKernArgData, dPacket)
@@ -286,15 +286,15 @@ func (b *Benchmark) exec() {
 		offsetElements += numElements
 	}
 
-	// 等待所有队列完成
+	// Wait for all queues to complete
 	for _, q := range queues {
 		b.driver.DrainCommandQueue(q)
 	}
 
-	// 从 device 取回结果
+	// Retrieve results from device
 	b.driver.MemCopyD2H(b.context, b.outputData, b.gOutputData)
 
-	// 清理 GPU 内存
+	// Clean up GPU memory
 	if b.gInputData != 0 {
 		b.driver.FreeMemory(b.context, b.gInputData)
 	}
@@ -333,12 +333,12 @@ func (b *Benchmark) Verify() {
 			inputIdx := i*b.SeqLen + j
 			wordId := b.inputData[inputIdx]
 
-			// padding 没有配置则当作普通索引
+			
 			for k := 0; k < b.EmbeddingDim; k++ {
 				outputIdx := inputIdx*b.EmbeddingDim + k
 				weightIdx := int(wordId)*b.EmbeddingDim + k
 
-				// 边界检查（防止越界）
+				
 				var expected float32 = 0
 				if wordId >= 0 && int(wordId) < b.VocabSize {
 					expected = b.weightData[weightIdx]
@@ -398,7 +398,7 @@ func (b *Benchmark) lazyInitMem() {
 	b.driver.LazyMemCopyH2D(b.context, b.weightData, uint64(weightSize*4))
 	b.gWeightData = b.driver.AllocatedVAddr
 
-	// 输出单独分配
+	// Output is written back by the kernel, no need to initialize on device
 	b.gOutputData = b.driver.AllocateMemory(b.context, uint64(outputSize*4))
 	b.driver.Distribute(b.context, b.gOutputData, uint64(outputSize*4), b.gpus)
 
@@ -416,7 +416,7 @@ func (b *Benchmark) saveExec() {
 
 	totalElements := b.BatchSize * b.SeqLen
 
-	// 均匀分配 totalElements 到多个 GPU（base + remainder）
+	// Distribute totalElements evenly across multiple GPUs (base + remainder)
 	numGpus := len(b.gpus)
 	base := totalElements / numGpus
 	rem := totalElements % numGpus

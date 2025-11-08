@@ -37,6 +37,15 @@ type SimpleTensor struct {
 	descriptor string
 }
 
+
+func NewSimpleTensor(size []int, data []float64, descriptor string) *SimpleTensor {
+	return &SimpleTensor{
+		size:       size,
+		data:       data,
+		descriptor: descriptor,
+	}
+}
+
 // Dim returns the number of dimensions that the tensor has.
 func (t SimpleTensor) Dim() int {
 	return len(t.size)

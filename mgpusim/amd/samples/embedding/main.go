@@ -18,7 +18,7 @@ var (
 
 	// extras
 	useUnifiedFlag = flag.Bool("unified", false, "Use unified memory for allocations")
-	saveMemFlag    = flag.Bool("savemem", false, "Enable memory-saving (lazy) mode")
+	saveMemFlag    = flag.Bool("savemem", true, "Enable memory-saving (lazy) mode")
 	gpuListFlag = flag.String("gpu-list", "0", "Comma-separated GPU ids to use, e.g. \"0\" or \"0,1\"")
 )
 
@@ -63,7 +63,7 @@ func main() {
 		bench.SetMemorySaving()
 	}
 
-	// 解析并设置 GPU 列表
+	// Select GPUs
 	gpus := parseGPUs(*gpuListFlag)
 	bench.SelectGPU(gpus)
 

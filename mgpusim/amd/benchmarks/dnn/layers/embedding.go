@@ -2,12 +2,14 @@ package layers
 
 import (
 	"fmt"
-	"math/rand"
 	"math"
+	"math/rand"
+
 	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/tensor"
 )
 
-// An EmbeddingLayer implements an embedding layer.
+// EmbeddingLayer implements a token or positional embedding layer.
+// It maps integer token IDs to dense embedding vectors.
 type EmbeddingLayer struct {
 	Name       string
 	layerIndex int
@@ -23,7 +25,7 @@ type EmbeddingLayer struct {
 	forwardInput    tensor.Tensor
 }
 
-// NewEmbeddingLayer creates a new embedding layer.
+// NewEmbeddingLayer creates a new embedding layer with given vocabulary size and embedding dimension.
 func NewEmbeddingLayer(
 	name string,
 	layerIndex int,
@@ -31,7 +33,8 @@ func NewEmbeddingLayer(
 	vocabSize, embeddingDim int,
 ) *EmbeddingLayer {
 	numWeight := vocabSize * embeddingDim
-	layerIndex = 0 
+	layerIndex = 0 // Embedding layer does not require input gradient computation.
+
 	l := &EmbeddingLayer{
 		Name:         name,
 		layerIndex:   layerIndex,
@@ -47,26 +50,48 @@ func NewEmbeddingLayer(
 
 	fmt.Printf("[NewEmbeddingLayer-Allocate] parameters: 0x%x, weights: 0x%x\n",
 		l.parameters, l.weights)
+	return l
+}
+func SaveNewEmbeddingLayer(
+	name string,
+	layerIndex int,
+	to tensor.Operator,
+	vocabSize, embeddingDim int,
+) *EmbeddingLayer {
+	numWeight := vocabSize * embeddingDim
+	l := &EmbeddingLayer{
+		Name:           name,
+		layerIndex:     layerIndex,
+		to:             to,
+		VocabSize:      vocabSize,
+		EmbeddingDim:   embeddingDim,
+		gradients:      to.Create([]int{numWeight}),
+		weightGradients: nil,
+	}
 
+	l.weightGradients = l.gradients
+	fmt.Printf("[SaveNewEmbeddingLayer-Allocate] gradients: 0x%x, weightGradients: 0x%x\n",
+		l.gradients, l.weightGradients)
 	return l
 }
 
-// Randomize initializes the parameters of the layer randomly.
+// Randomize initializes the embedding weights randomly (for token embeddings)
+// or using sinusoidal positional encoding (for position embeddings).
 func (l *EmbeddingLayer) Randomize() {
 	numWeight := l.VocabSize * l.EmbeddingDim
 	weights := make([]float64, numWeight)
 
 	if l.Name == "wte" {
-		// 普通词嵌入
+		// Token embedding: random initialization
 		for i := 0; i < numWeight; i++ {
 			weights[i] = (rand.Float64() - 0.5) / float64(l.EmbeddingDim) * 2
 		}
 		fmt.Println("[EmbeddingLayer.Randomize] Initialized token embedding (wte) randomly")
 	} else if l.Name == "wpe" {
-		// 位置嵌入使用正弦编码
+		// Positional embedding: sinusoidal encoding
 		for pos := 0; pos < l.VocabSize; pos++ {
 			for i := 0; i < l.EmbeddingDim; i++ {
-				divTerm := math.Exp(-float64(i/2)*math.Log(10000)/float64(l.EmbeddingDim))
+				divTerm := math.Exp(-float64(i/2) * math.Log(10000) / float64(l.EmbeddingDim))
 				if i%2 == 0 {
 					weights[pos*l.EmbeddingDim+i] = math.Sin(float64(pos) * divTerm)
 				} else {
@@ -80,184 +105,183 @@ func (l *EmbeddingLayer) Randomize() {
 	l.to.Init(l.weights, weights)
 }
 
-// Forward performs the forward propagation operation.
-func (l *EmbeddingLayer) Forward(input tensor.Tensor) tensor.Tensor {
-    l.forwardInput = l.to.Clone(input)
-    
-    // 直接调用，返回输出张量
-    output := l.to.EmbeddingForward(input, l.weights, -1)
-    
-    l.to.Free(input)
-    return output
-}
+// LazyRandomize performs lazy initialization on GPU/CPU operator side.
+// Used when delayed memory allocation is required for large-scale training.
+func (l *EmbeddingLayer) LazyRandomize() {
+	fmt.Printf("[EmbeddingLayer.LazyRandomize] Start lazy initialization for %s\n", l.Name)
 
-// Backward calculates the weight gradients.
-func (l *EmbeddingLayer) Backward(
-	input tensor.Tensor,
-) tensor.Tensor {
-	l.to.Clear(l.gradients)
+	numWeight := l.VocabSize * l.EmbeddingDim
+	weights := make([]float64, numWeight)
 
-	l.calculateWeightGradients(input)
-	var output tensor.Tensor
-
-	if l.layerIndex > 0 {
-		output = l.calculateInputGradients(input)
+	if l.Name == "wte" {
+		for i := 0; i < numWeight; i++ {
+			weights[i] = (rand.Float64() - 0.5) / float64(l.EmbeddingDim) * 2
+		}
+	} else if l.Name == "wpe" {
+		for pos := 0; pos < l.VocabSize; pos++ {
+			for i := 0; i < l.EmbeddingDim; i++ {
+				divTerm := math.Exp(-float64(i/2) * math.Log(10000) / float64(l.EmbeddingDim))
+				if i%2 == 0 {
+					weights[pos*l.EmbeddingDim+i] = math.Sin(float64(pos) * divTerm)
+				} else {
+					weights[pos*l.EmbeddingDim+i] = math.Cos(float64(pos) * divTerm)
+				}
+			}
+		}
 	}
 
+	datas := [][]float64{weights}
+	nums := []int{numWeight}
+	slices := l.to.LazyInitSlices(datas, nums, numWeight)
+
+	l.parameters = slices[0]
+	l.weights = slices[0]
+	fmt.Printf("[EmbeddingLayer.LazyRandomize] Allocated parameters: 0x%x, weights: 0x%x\n", l.parameters, l.weights)
+}
+
+// Forward performs the embedding lookup operation.
+// Input: [B, T] integer token indices
+// Output: [B, T, C] embedding vectors
+func (l *EmbeddingLayer) Forward(input tensor.Tensor) tensor.Tensor {
+	l.forwardInput = l.to.Clone(input)
+	inputShape := input.Size()
+	batch, seq := inputShape[0], inputShape[1]
+	output := l.to.Zeros([]int{batch, seq, l.EmbeddingDim})
+
+	inputVec := input.Vector()
+	weightVec := l.weights.Vector()
+	outputVec := output.Vector()
+
+	for b := 0; b < batch; b++ {
+		for t := 0; t < seq; t++ {
+			idx := int(inputVec[b*seq+t])
+			if idx < 0 || idx >= l.VocabSize {
+				continue
+			}
+			for d := 0; d < l.EmbeddingDim; d++ {
+				outputVec[(b*seq+t)*l.EmbeddingDim+d] = weightVec[idx*l.EmbeddingDim+d]
+			}
+		}
+	}
+
+	l.to.Free(input)
+	return output
+}
+
+// Backward accumulates gradients for each embedding vector used in forward pass.
+// Input: gradient of output [B, T, C]
+// Output: zero tensor [B, T] (no input gradients needed)
+func (l *EmbeddingLayer) Backward(input tensor.Tensor) tensor.Tensor {
+	fmt.Printf("[EmbeddingLayer Backward] VocabSize=%d, EmbeddingDim=%d, weightGradients len=%d\n",
+		l.VocabSize, l.EmbeddingDim, len(l.weightGradients.Vector()))
+
+	l.to.Clear(l.gradients)
+	gradVec := input.Vector()
+
+	inputShape := l.forwardInput.Size()
+	batch, seq := inputShape[0], inputShape[1]
+	inputIdxVec := l.forwardInput.Vector()
+	gradWeightVec := l.weightGradients.Vector()
+
+	for b := 0; b < batch; b++ {
+		for t := 0; t < seq; t++ {
+			idx := int(inputIdxVec[b*seq+t])
+			if idx < 0 || idx >= l.VocabSize {
+				continue
+			}
+			for d := 0; d < l.EmbeddingDim; d++ {
+				gradIndex := (b*seq+t)*l.EmbeddingDim + d
+				if gradIndex < len(gradVec) {
+					gradWeightVec[idx*l.EmbeddingDim+d] += gradVec[gradIndex]
+				}
+			}
+		}
+	}
+
+	outGrad := l.to.Zeros([]int{batch, seq})
 	l.to.Free(l.forwardInput)
-	l.to.Free(input) // Free input
+	l.to.Free(input)
+	return outGrad
+}
 
+// SaveForward performs a memory-optimized forward pass.
+// It uses lazy tensor allocation and minimal temporary storage.
+func (l *EmbeddingLayer) SaveForward(input tensor.Tensor) tensor.Tensor {
+	l.forwardInput = l.to.LazyClone(input)
+	inputShape := input.Size()
+	batch, seq := inputShape[0], inputShape[1]
+	output := l.to.LazyZeros([]int{batch, seq, l.EmbeddingDim})
+
+	inputVec := input.Vector()
+	weightVec := l.weights.Vector()
+	outputVec := output.Vector()
+
+	for b := 0; b < batch; b++ {
+		for t := 0; t < seq; t++ {
+			idx := int(inputVec[b*seq+t])
+			if idx < 0 || idx >= l.VocabSize {
+				continue
+			}
+			for d := 0; d < l.EmbeddingDim; d++ {
+				outputVec[(b*seq+t)*l.EmbeddingDim+d] = weightVec[idx*l.EmbeddingDim+d]
+			}
+		}
+	}
+
+	l.to.Free(input)
 	return output
 }
 
-func (l *EmbeddingLayer) calculateWeightGradients(input tensor.Tensor) {
-    // 计算权重梯度并返回梯度张量
-    gradWeight := l.to.EmbeddingBackwardWeight(
-        l.forwardInput, input, -1, 1.0,
-    )
-    
-    // 将梯度复制到权重梯度张量中
-    l.to.Copy(l.weightGradients, gradWeight)
-    l.to.Free(gradWeight)
+// SaveBackward performs a memory-optimized backward pass.
+// It avoids full activation reconstruction and directly computes weight gradients.
+func (l *EmbeddingLayer) SaveBackward(input tensor.Tensor) tensor.Tensor {
+	l.to.Clear(l.gradients)
+	gradVec := input.Vector()
+
+	inputShape := l.forwardInput.Size()
+	batch, seq := inputShape[0], inputShape[1]
+	inputIdxVec := l.forwardInput.Vector()
+	gradWeightVec := l.weightGradients.Vector()
+
+	for b := 0; b < batch; b++ {
+		for t := 0; t < seq; t++ {
+			idx := int(inputIdxVec[b*seq+t])
+			if idx < 0 || idx >= l.VocabSize {
+				continue
+			}
+			for d := 0; d < l.EmbeddingDim; d++ {
+				gradWeightVec[idx*l.EmbeddingDim+d] += gradVec[(b*seq+t)*l.EmbeddingDim+d]
+			}
+		}
+	}
+
+	outGrad := l.to.LazyZeros([]int{batch, seq})
+	l.to.Free(l.forwardInput)
+	l.to.Free(input)
+	return outGrad
 }
 
-func (l *EmbeddingLayer) calculateInputGradients(
-	input tensor.Tensor,
-) tensor.Tensor {
-	batchSize := l.forwardInput.Size()[0]
-	seqLen := l.forwardInput.Size()[1]
-
-	// embedding 层对输入的梯度通常为0，因为输入是索引
-	output := l.to.Zeros([]int{batchSize, seqLen})
-	return output
-}
-
-// Parameters returns the parameters of the layer.
+// Parameters returns the embedding weight tensor.
 func (l EmbeddingLayer) Parameters() tensor.Tensor {
 	return l.parameters
 }
 
-// Gradients returns the gradients of the layer.
+// Gradients returns the gradient tensor associated with embedding weights.
 func (l EmbeddingLayer) Gradients() tensor.Tensor {
 	return l.gradients
 }
 
-// SaveNewEmbeddingLayer creates an embedding layer with memory optimization.
-func SaveNewEmbeddingLayer(
-	name string,
-	index int,
-	to tensor.Operator,
-	vocabSize, embeddingDim int,
-) *EmbeddingLayer {
-	numWeight := vocabSize * embeddingDim
-	l := &EmbeddingLayer{
-		Name:         name,
-		layerIndex:   index,
-		to:           to,
-		VocabSize:    vocabSize,
-		EmbeddingDim: embeddingDim,
-		gradients:    to.Create([]int{numWeight}),
-	}
-
-	l.weightGradients = l.gradients
-
-	fmt.Printf("[SaveNewEmbeddingLayer-Allocate] gradients: 0x%x, weightGradients: 0x%x\n",
-		l.gradients, l.weightGradients)
-
-	return l
-}
-
-// LazyRandomize lazily initializes the parameters of the layer randomly.
-func (l *EmbeddingLayer) LazyRandomize() {
-	fmt.Printf("EmbeddingLayer.LazyRandomize\n")
-
-	numWeight := l.VocabSize * l.EmbeddingDim
-	weights := make([]float64, numWeight)
-	for i := 0; i < numWeight; i++ {
-		weights[i] = (rand.Float64() - 0.5) / float64(l.EmbeddingDim) * 2
-	}
-
-	
-	l.parameters = l.to.CreateWithData(weights, []int{numWeight}, "")
-	l.weights = l.parameters
-
-	fmt.Printf("[LazyRandomize-Allocate] parameters: 0x%x, weights: 0x%x\n",
-		l.parameters, l.weights)
-}
-
-// SaveForward performs the forward propagation operation in a memory saving way.
-func (l *EmbeddingLayer) SaveForward(
-	input tensor.Tensor,
-) tensor.Tensor {
-	l.forwardInput = l.to.LazyClone(input)
-
-	// 执行 embedding 查找（内存优化版本）
-	output := l.to.EmbeddingForward(input, l.weights, -1)
-
-	l.to.Free(input) // Free input
-
-	return output
-}
-
-// SaveBackward calculates the weight gradients in a memory saving way.
-func (l *EmbeddingLayer) SaveBackward(
-	input tensor.Tensor,
-) tensor.Tensor {
-	l.to.Clear(l.gradients) // Original clear does not allocate new memory
-
-	l.saveCalculateWeightGradients(input)
-	var output tensor.Tensor
-
-	if l.layerIndex > 0 {
-		output = l.saveCalculateInputGradients(input)
-	}
-
-	l.to.Free(l.forwardInput)
-	l.to.Free(input) // Free input
-
-	return output
-}
-
-func (l *EmbeddingLayer) saveCalculateWeightGradients(
-	input tensor.Tensor,
-) {
-	// 计算权重梯度并返回梯度张量
-	gradWeight := l.to.EmbeddingBackwardWeight(
-		l.forwardInput, // 前向传播的输入索引
-		input,          // 梯度输入
-		-1,             // padding index
-		1.0,            // scale
-	)
-
-	// 将计算得到的梯度复制到权重梯度张量中
-	l.to.LazyCopy(l.weightGradients, gradWeight)
-	l.to.Free(gradWeight) // 释放临时梯度张量
-}
-
-func (l *EmbeddingLayer) saveCalculateInputGradients(
-	input tensor.Tensor,
-) tensor.Tensor {
-	batchSize := l.forwardInput.Size()[0]
-	seqLen := l.forwardInput.Size()[1]
-
-	// embedding 层对输入的梯度通常为0
-	output := l.to.LazyZeros([]int{batchSize, seqLen})
-	return output
-}
-
-// SetWeights allows setting pre-trained weights for the embedding layer
+// SetWeights loads external weights into the embedding layer (e.g., pretrained embeddings).
 func (l *EmbeddingLayer) SetWeights(weights []float64) {
 	l.to.Init(l.weights, weights)
 }
 
-// GetWeights returns the current weights of the embedding layer
+// GetWeights returns the current embedding weight tensor.
 func (l *EmbeddingLayer) GetWeights() tensor.Tensor {
 	return l.weights
 }
 
-// GetOutputShape returns the output shape for a given input shape
+// GetOutputShape returns the output tensor shape given an input shape.
 func (l *EmbeddingLayer) GetOutputShape(inputShape []int) []int {
-	// input: [batch_size, seq_len]
-	// output: [batch_size, seq_len, embedding_dim]
 	return []int{inputShape[0], inputShape[1], l.EmbeddingDim}
 }

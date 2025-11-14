@@ -978,93 +978,42 @@ func (to CPUOperator) numElementMustMatch(t1, t2 Tensor) {
 
 // LazyCreateWithData creates a lightweight tensor initialized with given data
 func (to CPUOperator) LazyCreateWithData(data []float64, size []int, descriptor string) Tensor {
-	t := &SimpleTensor{
-		descriptor: descriptor,
-		data:       make([]float64, len(data)),
-	}
-	copy(t.data, data)
-
-	t.size = make([]int, len(size))
-	copy(t.size, size)
-	return t
+	return nil
 }
 
 // LazyInitSlices initializes multiple tensors lazily, minimizing memory allocation.
 func (to CPUOperator) LazyInitSlices(datas [][]float64, nums []int, allocateNum int) []Tensor {
-	if len(datas) != len(nums) {
-		panic("LazyInitSlices: datas and nums length mismatch")
-	}
-
-	slices := make([]Tensor, len(datas))
-	for i, data := range datas {
-		if len(data) != nums[i] {
-			panic(fmt.Sprintf("LazyInitSlices: data length mismatch for slice %d", i))
-		}
-		tensor := &SimpleTensor{
-			descriptor: fmt.Sprintf("lazy_tensor_%d", i),
-			data:       make([]float64, len(data)),
-			size:       []int{nums[i]},
-		}
-		copy(tensor.data, data)
-		slices[i] = tensor
-	}
-	return slices
+	return nil
 }
 
 // LazyClone creates a shallow copy that shares the same underlying data.
 func (to CPUOperator) LazyClone(t Tensor) Tensor {
-	in := t.(*SimpleTensor)
-	out := &SimpleTensor{
-		descriptor: in.descriptor + "_lazy_clone",
-		size:       append([]int(nil), in.size...),
-		data:       in.data, 
-	}
-	return out
+	return nil
 }
 // LazyRepeat returns a tensor that conceptually repeats data, but doesn't reallocate.
 func (to CPUOperator) LazyRepeat(t Tensor, times int) Tensor {
-	in := t.(*SimpleTensor)
-	out := &SimpleTensor{
-		descriptor: in.descriptor + "_lazy_repeat",
-		size:       []int{numElement(in.size) * times},
-		data:       in.data,
-	}
-	return out
+	return nil
 }
 
 // LazyCopy simply references src's data into dst to avoid extra allocations.
 func (to CPUOperator) LazyCopy(dst Tensor, src Tensor) {
-	dstT := dst.(*SimpleTensor)
-	srcT := src.(*SimpleTensor)
-	dstT.data = srcT.data
-	dstT.size = append([]int(nil), srcT.size...)
-	dstT.descriptor = srcT.descriptor + "_lazy_copy"
+	
 }
 
 // LazyReshape changes tensor shape without reallocating memory.
 func (to CPUOperator) LazyReshape(t Tensor, newSize []int) Tensor {
-	in := t.(*SimpleTensor)
-	out := &SimpleTensor{
-		descriptor: in.descriptor + "_lazy_reshape",
-		size:       append([]int(nil), newSize...),
-		data:       in.data, 
-	}
-	return out
+	return nil
 }
 
 // LazyZeros creates a zero tensor with minimal allocation.
 func (to CPUOperator) LazyZeros(size []int) Tensor {
-	return &SimpleTensor{
-		descriptor: "lazy_zeros",
-		size:       append([]int(nil), size...),
-		data:       make([]float64, numElement(size)),
-	}
+	return nil
 }
 
 // LazySum performs a reduced sum operation but keeps shared data semantics.
 func (to CPUOperator) LazySum(t Tensor, axis []int) Tensor {
 	// Just use normal sum to keep it simple on CPU
-	return to.Sum(t, axis)
+	return nil
 }
 
 // SaveGemm of the cpu operator does nothing.

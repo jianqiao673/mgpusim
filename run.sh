@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 设置默认值
-DEFAULT_PROGRAM="embedding"
+DEFAULT_PROGRAM="relu"
 DEFAULT_ARGS="-timing -trace-vis"
 # DEFAULT_ARGS="-timing -trace-vis -verify"
 # DEFAULT_ARGS="-timing -trace-vis -save-memory"

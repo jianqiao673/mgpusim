@@ -473,3 +473,144 @@ func (l *CausalSelfAttentionLayer) Close() {
 		}
 	}
 }
+func (l *CausalSelfAttentionLayer) LazyRandomize() {
+    fmt.Printf("[CausalSelfAttentionLayer.LazyRandomize] n_embd=%d, n_head=%d\n",
+        l.config.NEmbd, l.config.NHead)
+
+    n1 := l.config.NEmbd * 3 * l.config.NEmbd
+    n2 := l.config.NEmbd * l.config.NEmbd
+    totalParams := n1 + n2
+
+    xavier := math.Sqrt(2.0 / float64(l.config.NEmbd))
+
+    // === 准备权重数据 ===
+    cAttnData := make([]float64, n1)
+    for i := range cAttnData {
+        cAttnData[i] = (rand.Float64()*2 - 1) * xavier
+    }
+    cProjData := make([]float64, n2)
+    for i := range cProjData {
+        cProjData[i] = (rand.Float64()*2 - 1) * xavier
+    }
+
+    nums := []int{n1, n2}
+
+    // === 调用 LazyInitSlices ===
+    slices := l.to.LazyInitSlices(
+        [][]float64{cAttnData, cProjData},
+        nums,
+        totalParams,
+    )
+
+    // === 绑定到 layer ===
+    l.cAttnWeights = slices[0]
+    l.cProjWeights = slices[1]
+
+    // === Bias 初始化（如有）===
+    if l.config.Bias {
+        l.cAttnBias = l.to.Create([]int{3 * l.config.NEmbd})
+        l.cProjBias = l.to.Create([]int{l.config.NEmbd})
+        l.to.Init(l.cAttnBias, make([]float64, 3*l.config.NEmbd))
+        l.to.Init(l.cProjBias, make([]float64, l.config.NEmbd))
+    }
+}
+
+
+
+
+// SaveForward 显存优化版前向传播（最小化激活保留）
+func (l *CausalSelfAttentionLayer) SaveForward(input tensor.Tensor) tensor.Tensor {
+	l.forwardInput = l.to.LazyClone(input)
+
+	B, T, C := input.Size()[0], input.Size()[1], input.Size()[2]
+	headSize := C / l.config.NHead
+
+	// === 1. QKV ===
+	in2D := l.to.LazyReshape(input, []int{B * T, C})
+	outputMatrix := l.to.LazyZeros([]int{B * T, 3 * C})
+
+	// 手动实现偏置叠加：用 SaveGemm 加上重复偏置
+	if l.config.Bias && l.cAttnBias != nil {
+		bias2D := l.to.LazyReshape(l.cAttnBias, []int{1, 3 * C})
+		repeatedBias := l.to.LazyRepeat(bias2D, B*T)
+		// 手动加法：Gemm(scaleA=0, scaleB=1, out=repeatedBias)
+		outputMatrix = l.to.SaveGemm(false, false, 0, 1, repeatedBias, repeatedBias, outputMatrix)
+	}
+
+	qkv2D := l.to.SaveGemm(false, false, 1.0, 1.0, in2D, l.cAttnWeights, outputMatrix)
+	qkv := l.to.LazyReshape(qkv2D, []int{B, T, 3 * C})
+
+	// === 2. 拆分 Q, K, V ===
+	q, k, v := l.splitQKV(qkv, B, T, C)
+	q = l.reshapeToMultiHead(q, B, T, headSize)
+	k = l.reshapeToMultiHead(k, B, T, headSize)
+	v = l.reshapeToMultiHead(v, B, T, headSize)
+
+	// === 3. Attention ===
+	att := l.computeAttentionScores(q, k, B, T, headSize)
+	attMasked := l.applyCausalMask(att, B, T)
+
+	attMasked2D := l.to.LazyReshape(attMasked, []int{B * l.config.NHead * T, T})
+	softmaxOut2D := l.to.LazySoftmax(attMasked2D)
+	softmaxOut := l.to.LazyReshape(softmaxOut2D, attMasked.Size())
+
+	// === 4. 应用注意力 ===
+	y := l.applyAttention(softmaxOut, v, B, T, headSize)
+	y = l.reassembleHeads(y, B, T, C)
+
+	// === 5. 输出投影 ===
+	y2D := l.to.LazyReshape(y, []int{B * T, C})
+	projOut := l.to.LazyZeros([]int{B * T, C})
+
+	if l.config.Bias && l.cProjBias != nil {
+		projBias2D := l.to.LazyReshape(l.cProjBias, []int{1, C})
+		repeatedBias := l.to.LazyRepeat(projBias2D, B*T)
+		projOut = l.to.SaveGemm(false, false, 0, 1, repeatedBias, repeatedBias, projOut)
+	}
+
+	out2D := l.to.SaveGemm(false, false, 1.0, 1.0, y2D, l.cProjWeights, projOut)
+	out := l.to.LazyReshape(out2D, []int{B, T, C})
+
+	// === 释放所有中间变量 ===
+	for _, t := range []tensor.Tensor{
+		in2D, outputMatrix, qkv2D, qkv, q, k, v, att, attMasked,
+		softmaxOut2D, softmaxOut, y, y2D, projOut, out2D,
+	} {
+		if t != nil {
+			l.to.Free(t)
+		}
+	}
+
+	l.cleanupForwardCache()
+	return out
+}
+
+// SaveBackward 显存优化版反向传播
+func (l *CausalSelfAttentionLayer) SaveBackward(gradOutput tensor.Tensor) tensor.Tensor {
+	B, T, C := gradOutput.Size()[0], gradOutput.Size()[1], gradOutput.Size()[2]
+
+	if l.cProjWeightsGrad == nil {
+		l.cProjWeightsGrad = l.to.LazyZeros([]int{C, C})
+	}
+	l.to.Clear(l.cProjWeightsGrad)
+
+	gradOutput2D := l.to.LazyReshape(gradOutput, []int{B * T, C})
+	y2D := l.to.LazyReshape(l.forwardInput, []int{B * T, C})
+
+	// === 权重梯度 ===
+	l.cProjWeightsGrad = l.to.SaveGemm(true, false, 1.0, 1.0, y2D, gradOutput2D, l.cProjWeightsGrad)
+
+	// === 输入梯度 ===
+	gradInput2D := l.to.LazyZeros([]int{B * T, C})
+	gradInput2D = l.to.SaveGemm(false, true, 1.0, 0.0, gradOutput2D, l.cProjWeights, gradInput2D)
+	gradInput := l.to.LazyReshape(gradInput2D, []int{B, T, C})
+
+	for _, t := range []tensor.Tensor{gradOutput2D, y2D, gradInput2D} {
+		if t != nil {
+			l.to.Free(t)
+		}
+	}
+	l.cleanupForwardCache()
+
+	return gradInput
+}

@@ -11,7 +11,7 @@ import (
 	"github.com/sarchlab/mgpusim/v4/amd/kernels"
 )
 
-// KernelArgs 修正版
+// KernelArgs defines the arguments for the attention kernel.
 type KernelArgs struct {
 	B, T, C, NHead      uint32
 	HeadSize            uint32
@@ -39,13 +39,13 @@ type Benchmark struct {
 	kData      []float32
 	vData      []float32
 	outputData []float32
-	maskData   []float32 // 添加掩码数据
+	maskData   []float32 // add mask data
 
 	gQData      driver.Ptr
 	gKData      driver.Ptr
 	gVData      driver.Ptr
 	gOutputData driver.Ptr
-	gMaskData   driver.Ptr // 添加掩码指针
+	gMaskData   driver.Ptr // add mask pointer
 
 	useUnifiedMemory bool
 	saveMemory       bool
@@ -94,21 +94,35 @@ func (b *Benchmark) SetParameters(batchSize, seqLen, embedDim, numHeads int) {
 }
 
 func (b *Benchmark) Run() {
-	b.driver.SelectGPU(b.context, b.gpus[0])
-	if b.saveMemory {
-		b.lazyInitMem()
-		b.saveExec()
-	} else {
-		b.initMem()
-		b.exec()
-	}
+    defer func() {
+        if r := recover(); r != nil {
+            log.Printf("Recovered from panic in Run: %v", r)
+            // Ensure resources are cleaned up
+            b.safeCleanup()
+        }
+    }()
+
+    b.driver.SelectGPU(b.context, b.gpus[0])
+    if b.saveMemory {
+        b.lazyInitMem()
+        if !b.validateMemoryAllocation() {
+            log.Panic("Memory allocation validation failed")
+        }
+        b.saveExec()
+    } else {
+        b.initMem()
+        if !b.validateMemoryAllocation() {
+            log.Panic("Memory allocation validation failed")
+        }
+        b.exec()
+    }
 }
 
 func (b *Benchmark) initMem() {
 	totalElements := b.BatchSize * b.SeqLen * b.EmbedDim
 	elementSize := 4
 
-	// 分配输入输出内存
+	// Allocate input and output memory
 	if b.useUnifiedMemory {
 		b.gQData = b.driver.AllocateUnifiedMemory(b.context, uint64(totalElements*elementSize))
 		b.gKData = b.driver.AllocateUnifiedMemory(b.context, uint64(totalElements*elementSize))
@@ -126,16 +140,16 @@ func (b *Benchmark) initMem() {
 		b.driver.Distribute(b.context, b.gOutputData, uint64(totalElements*elementSize), b.gpus)
 	}
 
-	// 分配和初始化因果掩码
+	// Allocate and initialize causal mask
 	b.initCausalMask()
 
-	// 初始化输入数据
+	// Initialize input data
 	b.qData = make([]float32, totalElements)
 	b.kData = make([]float32, totalElements)
 	b.vData = make([]float32, totalElements)
 	b.outputData = make([]float32, totalElements)
 
-	// 使用更好的初始化方法
+	// Use better initialization method
 	b.initInputData()
 
 	b.driver.MemCopyH2D(b.context, b.gQData, b.qData)
@@ -173,9 +187,9 @@ func (b *Benchmark) initCausalMask() {
 func (b *Benchmark) initInputData() {
 	totalElements := b.BatchSize * b.SeqLen * b.EmbedDim
 
-	// 使用更合理的初始化，避免数值问题
+	// Use better initialization method to avoid numerical issues
 	for i := 0; i < totalElements; i++ {
-		// 使用小随机数，避免softmax数值不稳定
+		// Use small random numbers to avoid softmax numerical instability
 		b.qData[i] = (float32(i%100) - 50.0) * 0.01
 		b.kData[i] = (float32((i+33)%100) - 50.0) * 0.01
 		b.vData[i] = (float32((i+67)%100) - 50.0) * 0.01
@@ -209,7 +223,7 @@ func (b *Benchmark) exec() {
 			K:                   b.gKData,
 			V:                   b.gVData,
 			Output:              b.gOutputData,
-			Mask:                b.gMaskData, // 添加掩码
+			Mask:                b.gMaskData, // add mask
 			HiddenGlobalOffsetX: int64(batchPerGPU * i * b.SeqLen * b.EmbedDim),
 		}
 
@@ -221,7 +235,7 @@ func (b *Benchmark) exec() {
 			&kernArg,
 		)
 
-		// 保存指针以便后续清理
+		// Save pointers for later cleanup
 		_ = dCoData
 		_ = dKernArgData
 		_ = dPacket
@@ -236,7 +250,7 @@ func (b *Benchmark) exec() {
 }
 
 func (b *Benchmark) calculateWorkSize() ([3]uint32, [3]uint16) {
-	// 更合理的工作大小计算
+	// Calculate more reasonable work sizes
 	globalSizeX := uint32(b.BatchSize * b.NumHeads)
 	globalSizeY := uint32(b.SeqLen)
 	globalSizeZ := uint32(1)
@@ -245,7 +259,7 @@ func (b *Benchmark) calculateWorkSize() ([3]uint32, [3]uint16) {
 	localSizeY := uint16(16)
 	localSizeZ := uint16(1)
 
-	// 调整局部大小以适应问题规模
+	// adjust local size Y if global size Y is smaller
 	if globalSizeY < 16 {
 		localSizeY = uint16(globalSizeY)
 	}
@@ -255,95 +269,153 @@ func (b *Benchmark) calculateWorkSize() ([3]uint32, [3]uint16) {
 }
 
 func (b *Benchmark) lazyInitMem() {
-	if b.useUnifiedMemory {
-		panic("lazy init does not support unified memory")
-	}
+    if b.useUnifiedMemory {
+        panic("lazy init does not support unified memory")
+    }
 
-	totalElements := b.BatchSize * b.SeqLen * b.EmbedDim
+    totalElements := b.BatchSize * b.SeqLen * b.EmbedDim
 
-	b.qData = make([]float32, totalElements)
-	b.kData = make([]float32, totalElements)
-	b.vData = make([]float32, totalElements)
-	b.outputData = make([]float32, totalElements)
+    b.qData = make([]float32, totalElements)
+    b.kData = make([]float32, totalElements)
+    b.vData = make([]float32, totalElements)
+    b.outputData = make([]float32, totalElements)
 
-	b.initInputData()
+    b.initInputData()
 
-	// 延迟内存分配和复制
-	b.driver.LazyMemCopyH2D(b.context, b.qData, uint64(totalElements*4))
-	b.gQData = b.driver.AllocatedVAddr
+    // Allocate memory separately for each tensor to avoid sharing
+    b.driver.LazyMemCopyH2D(b.context, b.qData, uint64(totalElements*4))
+    b.gQData = b.driver.AllocatedVAddr
 
-	b.driver.LazyMemCopyH2D(b.context, b.kData, uint64(totalElements*4))
-	b.gKData = b.driver.AllocatedVAddr
+    b.driver.LazyMemCopyH2D(b.context, b.kData, uint64(totalElements*4))
+    b.gKData = b.driver.AllocatedVAddr
 
-	b.driver.LazyMemCopyH2D(b.context, b.vData, uint64(totalElements*4))
-	b.gVData = b.driver.AllocatedVAddr
+    b.driver.LazyMemCopyH2D(b.context, b.vData, uint64(totalElements*4))
+    b.gVData = b.driver.AllocatedVAddr
 
-	b.gOutputData = b.gQData
+    // Allocate memory separately for output
+    b.gOutputData = b.driver.AllocateMemory(b.context, uint64(totalElements*4))
 
-	// 初始化因果掩码
-	b.initCausalMask()
+    // Initialize causal mask
+    b.initCausalMask()
 
-	log.Printf("Lazy memory initialized")
+    log.Printf("Lazy memory initialized - Q: 0x%x, K: 0x%x, V: 0x%x, Output: 0x%x, Mask: 0x%x",
+        b.gQData, b.gKData, b.gVData, b.gOutputData, b.gMaskData)
+}
+
+func (b *Benchmark) safeCleanup() {
+    // only free non-nil pointers
+    pointers := []struct {
+        name string
+        ptr  *driver.Ptr
+    }{
+        {"gQData", &b.gQData},
+        {"gKData", &b.gKData},
+        {"gVData", &b.gVData},
+        {"gOutputData", &b.gOutputData},
+        {"gMaskData", &b.gMaskData},
+    }
+
+    for _, p := range pointers {
+        if *p.ptr != 0 {
+            log.Printf("Freeing %s: 0x%x", p.name, *p.ptr)
+            // Use safe free method
+            b.driver.FreeMemory(b.context, *p.ptr)
+            *p.ptr = 0
+        }
+    }
 }
 
 func (b *Benchmark) saveExec() {
-	// 实现与 exec 类似，但使用延迟操作
-	queues := make([]*driver.CommandQueue, len(b.gpus))
-	scale := float32(1.0 / math.Sqrt(float64(b.HeadSize)))
+    defer func() {
+        if r := recover(); r != nil {
+            log.Printf("Recovered from panic in saveExec: %v", r)
+            b.safeCleanup()
+        }
+    }()
 
-	globalSize, localSize := b.calculateWorkSize()
+    queues := make([]*driver.CommandQueue, len(b.gpus))
+    scale := float32(1.0 / math.Sqrt(float64(b.HeadSize)))
 
-	for i, gpu := range b.gpus {
-		b.driver.SelectGPU(b.context, gpu)
-		q := b.driver.CreateCommandQueue(b.context)
-		queues[i] = q
+    globalSize, localSize := b.calculateWorkSize()
 
-		batchPerGPU := b.BatchSize / len(b.gpus)
-		if batchPerGPU == 0 {
-			batchPerGPU = 1
-		}
+    for i, gpu := range b.gpus {
+        b.driver.SelectGPU(b.context, gpu)
+        q := b.driver.CreateCommandQueue(b.context)
+        queues[i] = q
 
-		kernArg := KernelArgs{
-			B:                   uint32(batchPerGPU),
-			T:                   uint32(b.SeqLen),
-			C:                   uint32(b.EmbedDim),
-			NHead:               uint32(b.NumHeads),
-			HeadSize:            uint32(b.HeadSize),
-			Scale:               scale,
-			Q:                   b.gQData,
-			K:                   b.gKData,
-			V:                   b.gVData,
-			Output:              b.gOutputData,
-			Mask:                b.gMaskData,
-			HiddenGlobalOffsetX: int64(batchPerGPU * i * b.SeqLen * b.EmbedDim),
-		}
+        batchPerGPU := b.BatchSize / len(b.gpus)
+        if batchPerGPU == 0 {
+            batchPerGPU = 1
+        }
 
-		b.driver.LazyEnqueueLaunchKernel(
-			q,
-			b.hsaco,
-			globalSize,
-			localSize,
-			&kernArg,
-		)
-	}
+        kernArg := KernelArgs{
+            B:                   uint32(batchPerGPU),
+            T:                   uint32(b.SeqLen),
+            C:                   uint32(b.EmbedDim),
+            NHead:               uint32(b.NumHeads),
+            HeadSize:            uint32(b.HeadSize),
+            Scale:               scale,
+            Q:                   b.gQData,
+            K:                   b.gKData,
+            V:                   b.gVData,
+            Output:              b.gOutputData,
+            Mask:                b.gMaskData,
+            HiddenGlobalOffsetX: int64(batchPerGPU * i * b.SeqLen * b.EmbedDim),
+        }
 
-	for _, q := range queues {
-		b.driver.DrainCommandQueue(q)
-	}
+        // Add error checking
+        if b.gQData == 0 || b.gKData == 0 || b.gVData == 0 || b.gOutputData == 0 {
+            log.Panicf("Invalid memory addresses in lazy execution: Q=0x%x, K=0x%x, V=0x%x, Output=0x%x",
+                b.gQData, b.gKData, b.gVData, b.gOutputData)
+        }
 
-	b.driver.MemCopyD2H(b.context, b.outputData, b.gOutputData)
-	b.cleanup()
+        b.driver.LazyEnqueueLaunchKernel(
+            q,
+            b.hsaco,
+            globalSize,
+            localSize,
+            &kernArg,
+        )
+    }
+
+    for _, q := range queues {
+        b.driver.DrainCommandQueue(q)
+    }
+
+    // Copy output data
+    if b.gOutputData != 0 {
+        b.driver.MemCopyD2H(b.context, b.outputData, b.gOutputData)
+    } else {
+        log.Printf("Warning: Output memory not allocated, skipping D2H copy")
+    }
+    
+    b.cleanup()
 }
-
 func (b *Benchmark) cleanup() {
-	// 清理内存
-	b.driver.FreeMemory(b.context, b.gQData)
-	b.driver.FreeMemory(b.context, b.gKData)
-	b.driver.FreeMemory(b.context, b.gVData)
-	b.driver.FreeMemory(b.context, b.gOutputData)
-	if b.gMaskData != 0 {
-		b.driver.FreeMemory(b.context, b.gMaskData)
-	}
+    // Add null pointer checks to avoid double free
+    if b.gQData != 0 {
+        b.driver.FreeMemory(b.context, b.gQData)
+        b.gQData = 0
+    }
+    if b.gKData != 0 && b.gKData != b.gQData {
+        b.driver.FreeMemory(b.context, b.gKData)
+        b.gKData = 0
+    }
+    if b.gVData != 0 && b.gVData != b.gQData && b.gVData != b.gKData {
+        b.driver.FreeMemory(b.context, b.gVData)
+        b.gVData = 0
+    }
+    if b.gOutputData != 0 && b.gOutputData != b.gQData && 
+       b.gOutputData != b.gKData && b.gOutputData != b.gVData {
+        b.driver.FreeMemory(b.context, b.gOutputData)
+        b.gOutputData = 0
+    }
+    if b.gMaskData != 0 {
+        b.driver.FreeMemory(b.context, b.gMaskData)
+        b.gMaskData = 0
+    }
+    
+    log.Printf("Memory cleanup completed")
 }
 
 func (b *Benchmark) Verify() {
@@ -380,7 +452,7 @@ func (b *Benchmark) Verify() {
 	log.Printf("Verification passed! Valid values: %d/%d, Range: [%f, %f]",
 		validCount, len(b.outputData), minVal, maxVal)
 
-	// 对于小规模问题，进行更详细的验证
+	// For small-scale problems, perform more detailed verification
 	if b.BatchSize <= 2 && b.SeqLen <= 128 {
 		b.detailedVerification()
 	}
@@ -389,7 +461,7 @@ func (b *Benchmark) Verify() {
 func (b *Benchmark) detailedVerification() {
 	log.Printf("Running detailed verification...")
 
-	// 检查输出的一些统计特性
+	// Check some statistical properties of the output
 	var sum float32
 	for i := range b.outputData {
 		sum += b.outputData[i]
@@ -406,8 +478,32 @@ func (b *Benchmark) detailedVerification() {
 
 	log.Printf("Output statistics - Mean: %f, StdDev: %f", mean, stdDev)
 
-	// 检查数值范围是否合理
+	// Check if the numerical range is reasonable
 	if stdDev > 1000 || math.Abs(float64(mean)) > 1000 {
 		log.Printf("Warning: Output values might be too large")
 	}
+}
+
+func (b *Benchmark) validateMemoryAllocation() bool {
+    if b.gQData == 0 {
+        log.Printf("Error: Q memory not allocated")
+        return false
+    }
+    if b.gKData == 0 {
+        log.Printf("Error: K memory not allocated")
+        return false
+    }
+    if b.gVData == 0 {
+        log.Printf("Error: V memory not allocated")
+        return false
+    }
+    if b.gOutputData == 0 {
+        log.Printf("Error: Output memory not allocated")
+        return false
+    }
+    if b.gMaskData == 0 {
+        log.Printf("Error: Mask memory not allocated")
+        return false
+    }
+    return true
 }

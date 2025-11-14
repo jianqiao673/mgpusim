@@ -23,6 +23,7 @@ type Context struct {
 	currentGPUID  int
 	prevPageVAddr uint64
 	l2Dirty       bool
+	driver        *Driver
 
 	queueMutex sync.Mutex
 	queues     []*CommandQueue
@@ -31,6 +32,25 @@ type Context struct {
 	buffers []*buffer
 }
 
+// CreateContext creates a new GPU driver context for allocating memory or launching kernels.
+func (d *Driver) CreateContext() *Context {
+	d.contextMutex.Lock()
+	defer d.contextMutex.Unlock()
+
+
+	pid := vm.PID(len(d.contexts) + 1)
+
+	ctx := &Context{
+		pid:          pid,
+		driver:       d,
+		currentGPUID: 1, 
+		queues:       make([]*CommandQueue, 0),
+		buffers:      make([]*buffer, 0),
+	}
+
+	d.contexts = append(d.contexts, ctx)
+	return ctx
+}
 func (c *Context) markAllBuffersDirty() {
 	for _, b := range c.buffers {
 		b.l2Dirty = true

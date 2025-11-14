@@ -13,7 +13,7 @@ var (
 	seqLen     = flag.Int("seqlen", 50, "Sequence length")
 	embedDim   = flag.Int("embed", 8, "Embedding dimension")
 	numHeads   = flag.Int("heads", 4, "Number of attention heads")
-	useLazy    = flag.Bool("lazy", false, "Use lazy memory allocation")
+	useLazy    = flag.Bool("lazy", true, "Use lazy memory allocation")
 	useUnified = flag.Bool("unified", false, "Use unified memory")
 )
 

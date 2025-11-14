@@ -64,6 +64,77 @@ type Driver struct {
 	AllocatedVAddr Ptr
 }
 
+// NewDriver creates a minimal driver instance for testing purposes.
+func NewDriver() *Driver {
+	// 选择 4KB 页 => log2PageSize = 12
+	const log2PageSize = uint64(12)
+
+	d := &Driver{
+		// NewTickingComponent 需要一个 sim.Freq 类型的参数，不能传 nil。
+		// 这里使用 sim.Freq(1) 作为占位频率（只要类型匹配即可）。
+		TickingComponent: sim.NewTickingComponent("Driver", nil, sim.Freq(1), nil),
+
+		// page table 需要 log2PageSize 参数（见你提供的 NewPageTable 实现）
+		pageTable: vm.NewPageTable(log2PageSize),
+
+		// mem.NewStorage 需要一个 uint64 容量（单位 byte）
+		globalStorage: mem.NewStorage(uint64(1 << 30)), // 1 GB
+
+		// driver 控制通道
+		driverStopped: make(chan bool, 1),
+		enqueueSignal: make(chan bool, 1),
+
+		// 初始化其它字段（避免 nil 导致 panic）
+		memoryAllocateReqMap: make(map[string]*mem.AllocateReq),
+		GPUs:                 make([]sim.Port, 0),
+		devices:              make([]*internal.Device, 0),
+		contexts:             make([]*Context, 0),
+		RemotePMCPorts:       make([]sim.Port, 0),
+
+		// 默认页大小的 log2
+		Log2PageSize: log2PageSize,
+	}
+
+	// 初始化并注入内存分配器：使用你 internal 包里已经存在的构造函数
+	// NewMemoryAllocator(pageTable vm.PageTable, log2PageSize uint64) MemoryAllocator
+	d.memAllocator = internal.NewMemoryAllocator(d.pageTable, d.Log2PageSize)
+
+	// 初始化 GPU / MMU 通信端口（符合你提供的 sim.NewPort 签名）
+	d.gpuPort = sim.NewPort(d, 1, 1, "DriverGPU")
+	d.mmuPort = sim.NewPort(d, 1, 1, "DriverMMU")
+
+	// distributor 是一个接口类型，测试时可以为 nil
+	var dist distributor = nil
+	d.distributor = dist
+
+	// 将端口注册到 ticking component（便于 trace / tick 时使用）
+	d.TickingComponent.AddPort("GPU", d.gpuPort)
+	d.TickingComponent.AddPort("MMU", d.mmuPort)
+	// --- Create and register default GPU device (ID = 1) ---
+	dev := &internal.Device{
+		ID:       1,
+		Type:     internal.DeviceTypeGPU,
+		MemState: internal.NewDeviceMemoryState(d.Log2PageSize),
+	}
+
+	// 给设备设置总内存（必须），比如 1 GiB
+	dev.SetTotalMemSize(1 << 30) // 1GB
+	
+	// 注册到内存分配器，这会调用 device.MemState.setInitialAddress(...) 并
+	// 把 device 的可用物理页空间加入 allocator 管理
+	d.memAllocator.RegisterDevice(dev)
+
+	// 把 device 也放到 driver.devices（driver 里其他地方可能会直接读取）
+	d.devices = append(d.devices, dev)
+
+	// 同时为 driver 注册一个 port（如果还没做）
+	d.GPUs = append(d.GPUs, sim.NewPort(d, 1, 1, "DefaultGPU"))
+
+	return d
+}
+
+
+
 // Run starts a new threads that handles all commands in the command queues
 func (d *Driver) Run() {
 	d.logSimulationStart()

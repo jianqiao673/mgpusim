@@ -7,7 +7,7 @@ import (
 	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/tensor"
 )
 
-// LayerNormLayer matches the coding style and interfaces of FullyConnectedLayer.
+// LayerNormLayer implements LayerNorm with optional SaveMemory mode
 type LayerNormLayer struct {
 	layerIndex int
 	to         tensor.Operator
@@ -28,12 +28,12 @@ type LayerNormLayer struct {
 	normalized   []float64 // cached normalized values (batch * NEmbd)
 	mean         []float64 // per-batch mean
 	variance     []float64 // per-batch variance
+
+	// SaveMemory flag
+	saveMemory bool
 }
 
-// NewLayerNormLayer creates a LayerNorm layer.
-// Signature style same as FullyConnectedLayer's New... functions.
-// NewLayerNormLayer creates a LayerNorm layer.
-// Signature style same as FullyConnectedLayer's New... functions.
+// NewLayerNormLayer creates a LayerNorm layer with optional SaveMemory
 func NewLayerNormLayer(index interface{}, to tensor.Operator, nEmbd int) *LayerNormLayer {
 	var idx int
 	switch v := index.(type) {
@@ -70,8 +70,18 @@ func NewLayerNormLayer(index interface{}, to tensor.Operator, nEmbd int) *LayerN
 	return l
 }
 
-// Randomize sets gamma=1, beta=0
+// SetSaveMemory allows toggling memory-saving mode
+func (l *LayerNormLayer) SetSaveMemory(flag bool) {
+	l.saveMemory = flag
+}
+
+// Randomize initializes gamma=1, beta=0
 func (l *LayerNormLayer) Randomize() {
+	if l.saveMemory {
+		l.LazyRandomize()
+		return
+	}
+
 	n := l.NEmbd
 	g := make([]float64, n)
 	b := make([]float64, n)
@@ -83,7 +93,7 @@ func (l *LayerNormLayer) Randomize() {
 	l.to.Init(l.beta, b)
 }
 
-// LazyRandomize mirrors FullyConnectedLayer.LazyRandomize style.
+// LazyRandomize implements memory-saving parameter initialization
 func (l *LayerNormLayer) LazyRandomize() {
 	fmt.Printf("LayerNormLayer.LazyRandomize\n")
 
@@ -94,177 +104,151 @@ func (l *LayerNormLayer) LazyRandomize() {
 		g[i] = 1.0
 		b[i] = 0.0
 	}
+
 	numParams := n * 2
 	datas := [][]float64{g, b}
 	nums := []int{n, numParams}
 
+	fmt.Println("before LazyInitSlices")
 	slices := l.to.LazyInitSlices(datas, nums, numParams)
-	// Following same layout as FullyConnectedLayer.LazyRandomize
+	fmt.Println("after LazyInitSlices")
+
 	l.parameters = slices[0]
 	l.gamma = slices[1]
 	l.beta = slices[2]
-
-	fmt.Printf("[LazyRandomize-Allocate] parameters: 0x%x, gamma: 0x%x, beta: 0x%x\n",
-		l.parameters, l.gamma, l.beta)
+	l.gammaGradient = l.to.Slice(l.gradients, 0, n)
+	l.betaGradient = l.to.Slice(l.gradients, n, numParams)
 }
 
-// Forward: input shape [batch, NEmbd] (same assumptions as FC Forward)
+// ForwardWithSave dispatches Forward or SaveForward
+func (l *LayerNormLayer) ForwardWithSave(input tensor.Tensor) tensor.Tensor {
+	if l.saveMemory {
+		return l.SaveForward(input)
+	}
+	return l.Forward(input)
+}
+
+// BackwardWithSave dispatches Backward or SaveBackward
+func (l *LayerNormLayer) BackwardWithSave(input tensor.Tensor) tensor.Tensor {
+	if l.saveMemory {
+		return l.SaveBackward(input)
+	}
+	return l.Backward(input)
+}
+
+// Forward implements standard LayerNorm forward
 func (l *LayerNormLayer) Forward(input tensor.Tensor) tensor.Tensor {
-	// keep clone for backward
-	l.forwardInput = l.to.Clone(input)
 
-	size := input.Size()
-	batch := size[0]
-	hidden := l.NEmbd
+    l.forwardInput = l.to.Clone(input)
+    size := input.Size()
+    batch := size[0]
+    hidden := l.NEmbd
+    out := l.to.Create([]int{batch, hidden})
 
-	// allocate output
-	out := l.to.Create([]int{batch, hidden})
+    // compute mean and variance per batch
+    l.normalized = make([]float64, batch*hidden)
+    l.mean = make([]float64, batch)
+    l.variance = make([]float64, batch)
 
-	// prepare caches
-	l.normalized = make([]float64, batch*hidden)
-	l.mean = make([]float64, batch)
-	l.variance = make([]float64, batch)
+    inVec := input.Vector()
+    outVec := out.Vector()
+    gammaVec := l.gamma.Vector()
+    betaVec := l.beta.Vector()
 
-	inVec := input.Vector()
-	outVec := out.Vector()
-	gammaVec := l.gamma.Vector()
-	betaVec := l.beta.Vector()
+    for b := 0; b < batch; b++ {
+        base := b * hidden
+        var mean float64
+        for j := 0; j < hidden; j++ {
+            mean += inVec[base+j]
+        }
+        mean /= float64(hidden)
+        l.mean[b] = mean
 
-	for b := 0; b < batch; b++ {
-		// compute mean
-		var mean float64
-		base := b * hidden
-		for j := 0; j < hidden; j++ {
-			mean += inVec[base+j]
-		}
-		mean /= float64(hidden)
-		l.mean[b] = mean
+        var variance float64
+        for j := 0; j < hidden; j++ {
+            diff := inVec[base+j] - mean
+            variance += diff * diff
+        }
+        variance /= float64(hidden)
+        l.variance[b] = variance
 
-		// compute variance
-		var variance float64
-		for j := 0; j < hidden; j++ {
-			diff := inVec[base+j] - mean
-			variance += diff * diff
-		}
-		variance /= float64(hidden)
-		l.variance[b] = variance
+        std := math.Sqrt(variance + l.eps)
+        for j := 0; j < hidden; j++ {
+            idx := base + j
+            norm := (inVec[idx] - mean) / std
+            l.normalized[idx] = norm
+            outVec[idx] = norm*gammaVec[j] + betaVec[j]
+        }
+    }
 
-		std := math.Sqrt(variance + l.eps)
-
-		for j := 0; j < hidden; j++ {
-			idx := base + j
-			norm := (inVec[idx] - mean) / std
-			l.normalized[idx] = norm
-			outVec[idx] = norm*gammaVec[j] + betaVec[j]
-		}
-	}
-
-	// free input as other layers do
-	l.to.Free(input)
-	return out
+    return out
 }
 
-// Backward: input is gradOutput with shape [batch, NEmbd]
+// Backward implements standard LayerNorm backward
 func (l *LayerNormLayer) Backward(input tensor.Tensor) tensor.Tensor {
-	// clear gradients buffer (match FC style)
-	l.to.Clear(l.gradients)
+    defer l.cleanupForwardCache()
 
-	size := input.Size()
-	batch := size[0]
-	hidden := l.NEmbd
+    l.to.Clear(l.gradients)
+    size := input.Size()
+    batch := size[0]
+    hidden := l.NEmbd
+    outGrad := l.to.Create([]int{batch, hidden})
 
-	// allocate output grad
-	outGrad := l.to.Create([]int{batch, hidden})
+    inVec := input.Vector()
+    normed := l.normalized
+    gammaVec := l.gamma.Vector()
+    outVec := outGrad.Vector()
 
-	// ensure gradient parameter tensors exist (they are slices of l.gradients)
-	// compute dgamma and dbeta by summation
-	inVec := input.Vector()
-	normed := l.normalized
-	gammaVec := l.gamma.Vector()
+    // parameter grads
+    for j := 0; j < hidden; j++ {
+        var dg, db float64
+        for b := 0; b < batch; b++ {
+            idx := b*hidden + j
+            dg += inVec[idx] * normed[idx]
+            db += inVec[idx]
+        }
+        l.gammaGradient.Vector()[j] = dg
+        l.betaGradient.Vector()[j] = db
+    }
 
-	// zero gradients storage (to be safe)
-	// l.to.Clear(l.gradients) already called
+    // input grads
+    for b := 0; b < batch; b++ {
+        base := b * hidden
+        std := math.Sqrt(l.variance[b] + l.eps)
+        var sumDy, sumDyXHat float64
+        for j := 0; j < hidden; j++ {
+            idx := base + j
+            dy := inVec[idx] * gammaVec[j]
+            sumDy += dy
+            sumDyXHat += dy * normed[idx]
+        }
+        for j := 0; j < hidden; j++ {
+            idx := base + j
+            dy := inVec[idx] * gammaVec[j]
+            xHat := normed[idx]
+            outVec[idx] = (float64(hidden)*dy - sumDy - xHat*sumDyXHat) / float64(hidden) / std
+        }
+    }
 
-	// compute gammaGrad and betaGrad
-	for j := 0; j < hidden; j++ {
-		var dg float64
-		var db float64
-		for b := 0; b < batch; b++ {
-			idx := b*hidden + j
-			dg += inVec[idx] * normed[idx]
-			db += inVec[idx]
-		}
-		l.gammaGradient.Vector()[j] = dg
-		l.betaGradient.Vector()[j] = db
-	}
-
-	// compute dx
-	outVec := outGrad.Vector()
-	for b := 0; b < batch; b++ {
-		base := b * hidden
-		//mean := l.mean[b]
-		variance := l.variance[b]
-		std := math.Sqrt(variance + l.eps)
-
-		// intermediate sums
-		var sumDy float64
-		var sumDyXHat float64
-		for j := 0; j < hidden; j++ {
-			idx := base + j
-			dy := inVec[idx] * gammaVec[j]
-			sumDy += dy
-			sumDyXHat += dy * normed[idx]
-		}
-
-		for j := 0; j < hidden; j++ {
-			idx := base + j
-			dy := inVec[idx] * gammaVec[j]
-			xHat := normed[idx]
-			// dx = (1/N) * (1/std) * (N*dy - sumDy - xHat * sumDyXHat)
-			val := (float64(hidden)*dy - sumDy - xHat*sumDyXHat) / float64(hidden)
-			val = val / std
-			outVec[idx] = val
-		}
-	}
-
-	// free saved inputs like other layers
-	l.to.Free(l.forwardInput)
-	l.to.Free(input)
-
-	return outGrad
+    return outGrad
 }
 
-// Parameters returns parameters tensor [gamma,beta]
-func (l LayerNormLayer) Parameters() tensor.Tensor {
-	return l.parameters
-}
-
-// Gradients returns gradients tensor [dgamma, dbeta]
-func (l LayerNormLayer) Gradients() tensor.Tensor {
-	return l.gradients
-}
-
-// SaveForward: memory-saving variant using Lazy* calls (mirror FC style)
+// SaveForward implements memory-saving forward
 func (l *LayerNormLayer) SaveForward(input tensor.Tensor) tensor.Tensor {
 	l.forwardInput = l.to.LazyClone(input)
-
 	size := input.Size()
 	batch := size[0]
 	hidden := l.NEmbd
-
-	// NOTE: CPUOperator's Lazy* are no-op, but we keep calls to match style.
 	out := l.to.Create([]int{batch, hidden})
 
-	// We'll compute numerically here as in Forward (can't rely on Lazy ops exist)
 	inVec := input.Vector()
 	outVec := out.Vector()
+	gammaVec := l.gamma.Vector()
+	betaVec := l.beta.Vector()
 
-	// caches
 	l.normalized = make([]float64, batch*hidden)
 	l.mean = make([]float64, batch)
 	l.variance = make([]float64, batch)
-	gammaVec := l.gamma.Vector()
-	betaVec := l.beta.Vector()
 
 	for b := 0; b < batch; b++ {
 		base := b * hidden
@@ -284,7 +268,6 @@ func (l *LayerNormLayer) SaveForward(input tensor.Tensor) tensor.Tensor {
 		l.variance[b] = variance
 
 		std := math.Sqrt(variance + l.eps)
-
 		for j := 0; j < hidden; j++ {
 			idx := base + j
 			norm := (inVec[idx] - mean) / std
@@ -297,67 +280,96 @@ func (l *LayerNormLayer) SaveForward(input tensor.Tensor) tensor.Tensor {
 	return out
 }
 
-// SaveBackward: memory-saving backward; mirror SaveForward
+// SaveBackward implements memory-saving backward
 func (l *LayerNormLayer) SaveBackward(input tensor.Tensor) tensor.Tensor {
-	// same as Backward but we call Lazy* copies where appropriate (kept minimal)
-	l.to.Clear(l.gradients)
+	if input == nil {
+        panic("LayerNormLayer.SaveBackward: input tensor is nil")
+    }
+    if l.forwardInput == nil {
+        panic("LayerNormLayer.SaveBackward: forwardInput is nil - was Forward() called?")
+    }
+    
+    l.to.Clear(l.gradients)
+    size := input.Size()
+    batch := size[0]
+    hidden := l.NEmbd
+    outGrad := l.to.Create([]int{batch, hidden})
 
-	size := input.Size()
-	batch := size[0]
-	hidden := l.NEmbd
+    inVec := input.Vector()
+    normed := l.normalized
+    gammaVec := l.gamma.Vector()
+    outVec := outGrad.Vector()
 
-	outGrad := l.to.Create([]int{batch, hidden})
+    // parameter grads
+    for j := 0; j < hidden; j++ {
+        var dg, db float64
+        for b := 0; b < batch; b++ {
+            idx := b*hidden + j
+            dg += inVec[idx] * normed[idx]
+            db += inVec[idx]
+        }
+        l.gammaGradient.Vector()[j] = dg
+        l.betaGradient.Vector()[j] = db
+    }
 
-	inVec := input.Vector()
-	normed := l.normalized
-	gammaVec := l.gamma.Vector()
+    // input grads
+    for b := 0; b < batch; b++ {
+        base := b * hidden
+        std := math.Sqrt(l.variance[b] + l.eps)
+        var sumDy, sumDyXHat float64
+        for j := 0; j < hidden; j++ {
+            idx := base + j
+            dy := inVec[idx] * gammaVec[j]
+            sumDy += dy
+            sumDyXHat += dy * normed[idx]
+        }
+        for j := 0; j < hidden; j++ {
+            idx := base + j
+            dy := inVec[idx] * gammaVec[j]
+            xHat := normed[idx]
+            outVec[idx] = (float64(hidden)*dy - sumDy - xHat*sumDyXHat) / float64(hidden) / std
+        }
+    }
 
-	// compute parameter grads
-	for j := 0; j < hidden; j++ {
-		var dg float64
-		var db float64
-		for b := 0; b < batch; b++ {
-			idx := b*hidden + j
-			dg += inVec[idx] * normed[idx]
-			db += inVec[idx]
-		}
-		l.gammaGradient.Vector()[j] = dg
-		l.betaGradient.Vector()[j] = db
-	}
-
-	// compute input grads
-	outVec := outGrad.Vector()
-	for b := 0; b < batch; b++ {
-		base := b * hidden
-		std := math.Sqrt(l.variance[b] + l.eps)
-
-		var sumDy float64
-		var sumDyXHat float64
-		for j := 0; j < hidden; j++ {
-			idx := base + j
-			dy := inVec[idx] * gammaVec[j]
-			sumDy += dy
-			sumDyXHat += dy * normed[idx]
-		}
-
-		for j := 0; j < hidden; j++ {
-			idx := base + j
-			dy := inVec[idx] * gammaVec[j]
-			xHat := normed[idx]
-			val := (float64(hidden)*dy - sumDy - xHat*sumDyXHat) / float64(hidden)
-			outVec[idx] = val / std
-		}
-	}
-
-	l.to.Free(l.forwardInput)
-	l.to.Free(input)
-	return outGrad
+    // free saved forward input to save memory
+    if l.forwardInput != nil {
+        l.to.Free(l.forwardInput)
+        l.forwardInput = nil
+    }
+    
+    l.to.Free(input) 
+    
+    return outGrad
+}
+// cleanupForwardCache cleans up cached tensors and slices after backward
+func (l *LayerNormLayer) cleanupForwardCache() {
+    // release forward input tensor
+    if l.forwardInput != nil {
+        l.to.Free(l.forwardInput)
+        l.forwardInput = nil
+    }
+    
+    // release slice caches
+    l.normalized = nil
+    l.mean = nil
+    l.variance = nil
 }
 
-func (l *LayerNormLayer) GammaGradient() tensor.Tensor {
-	return l.gammaGradient
+// Close releases resources
+func (l *LayerNormLayer) Close() {
+    l.cleanupForwardCache()
+    
+    // release parameter and gradient tensors
+    if l.parameters != nil {
+        l.to.Free(l.parameters)
+    }
+    if l.gradients != nil {
+        l.to.Free(l.gradients)
+    }
 }
 
-func (l *LayerNormLayer) BetaGradient() tensor.Tensor {
-	return l.betaGradient
-}
+// Accessors
+func (l LayerNormLayer) Parameters() tensor.Tensor     { return l.parameters }
+func (l LayerNormLayer) Gradients() tensor.Tensor      { return l.gradients }
+func (l *LayerNormLayer) GammaGradient() tensor.Tensor { return l.gammaGradient }
+func (l *LayerNormLayer) BetaGradient() tensor.Tensor  { return l.betaGradient }

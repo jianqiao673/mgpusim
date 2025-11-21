@@ -8,11 +8,14 @@ import (
 )
 
 func main() {
+
+	saveMemory := flag.Bool("save-mem", false , "Enable memory saving mode")
 	flag.Parse()
 
-	runner := new(runner.Runner).Init()
-
-	benchmark := gpt.NewBenchmark(runner.Driver(), runner.SaveMemory, gpt.Config{
+	r := new(runner.Runner).Init()
+	r.SaveMemory = *saveMemory
+    
+	benchmark := gpt.NewBenchmark(r.Driver(), r.SaveMemory, gpt.Config{
 		BlockSize: 3,
 		VocabSize: 2,
 		NEmbd:     16,
@@ -21,7 +24,7 @@ func main() {
 		Bias:      false,
 	})
 
-	runner.AddBenchmark(benchmark)
+	r.AddBenchmark(benchmark)
 
-	runner.Run()
+	r.Run()
 }

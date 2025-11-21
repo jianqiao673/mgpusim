@@ -3,7 +3,7 @@ package training
 import (
 	"log"
 	"math"
-
+	"fmt"
 	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/training/optimization"
 
 	"github.com/sarchlab/mgpusim/v4/amd/benchmarks/dnn/layers"
@@ -216,14 +216,39 @@ func (t Trainer) saveCalculateLoss(
 }
 
 func (t Trainer) saveBackward(derivative tensor.Tensor) {
-	//log.Printf("saveBackward.\n")
 	var output tensor.Tensor
 	output = derivative
+	
+	// 检查初始梯度是否为 nil
+	if output == nil {
+		fmt.Println("ERROR: saveBackward: initial derivative is nil")
+		return
+	}
+	
 	for i := len(t.Network.Layers) - 1; i >= 0; i-- {
 		input := output
+		
+		// 检查当前层的输入是否为 nil
+		if input == nil {
+			layerType := fmt.Sprintf("%T", t.Network.Layers[i])
+			fmt.Printf("ERROR: saveBackward: input to layer %d (%s) is nil\n", i, layerType)
+			return
+		}
+		
 		output = t.Network.Layers[i].SaveBackward(input)
+		
+		// 检查当前层的输出是否为 nil
+		if output == nil {
+			layerType := fmt.Sprintf("%T", t.Network.Layers[i])
+			fmt.Printf("ERROR: saveBackward: layer %d (%s) returned nil\n", i, layerType)
+			return
+		}
 	}
-	t.TO.Free(derivative) // Free derivative
+	
+	// 只在 derivative 不为 nil 时释放
+	if derivative != nil {
+		t.TO.Free(derivative) // Free derivative
+	}
 }
 
 func (t Trainer) lazyUpdateParameters() {

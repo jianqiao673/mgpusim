@@ -63,7 +63,7 @@ func NewBenchmark(driver *driver.Driver, saveMemory bool, config Config) *Benchm
 			layers.NewEmbeddingLayer("wpe", 0, b.to, b.config.BlockSize, b.config.NEmbd),
 			layers.NewTransformerLayerStack(b.to, b.config.NLayer, b.config.NEmbd, b.config.NHeads, false),
 			layers.NewLayerNormLayer("ln_f", b.to, b.config.NEmbd),
-			layers.NewBFullyConnectedLayer("lm_head", b.to, b.config.NEmbd, b.config.VocabSize, b.config.Bias),
+			layers.NewBFullyConnectedLayer("lm_head", 4, b.to, b.config.NEmbd, b.config.VocabSize, b.config.Bias),
 		},
 	}
 

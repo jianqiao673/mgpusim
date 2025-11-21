@@ -59,7 +59,7 @@ func NewBenchmark(driver *driver.Driver) *Benchmark {
 	b.driver = driver
 	b.context = driver.Init()
 
-	b.hsaco = kernels.LoadProgramFromMemory(hsacoBytes, "attention")
+	b.hsaco = kernels.LoadProgramFromMemory(hsacoBytes, "attention_streaming")
 	if b.hsaco == nil {
 		panic("Failed to load attention kernel")
 	}

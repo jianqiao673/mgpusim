@@ -52,6 +52,7 @@ func NewEmbeddingLayer(
 		l.parameters, l.weights)
 	return l
 }
+
 func SaveNewEmbeddingLayer(
 	name string,
 	layerIndex int,
@@ -60,12 +61,12 @@ func SaveNewEmbeddingLayer(
 ) *EmbeddingLayer {
 	numWeight := vocabSize * embeddingDim
 	l := &EmbeddingLayer{
-		Name:           name,
-		layerIndex:     layerIndex,
-		to:             to,
-		VocabSize:      vocabSize,
-		EmbeddingDim:   embeddingDim,
-		gradients:      to.Create([]int{numWeight}),
+		Name:            name,
+		layerIndex:      layerIndex,
+		to:              to,
+		VocabSize:       vocabSize,
+		EmbeddingDim:    embeddingDim,
+		gradients:       to.Create([]int{numWeight}),
 		weightGradients: nil,
 	}
 
@@ -143,10 +144,11 @@ func (l *EmbeddingLayer) LazyRandomize() {
 // Input: [B, T] integer token indices
 // Output: [B, T, C] embedding vectors
 func (l *EmbeddingLayer) Forward(input tensor.Tensor) tensor.Tensor {
+
 	l.forwardInput = l.to.Clone(input)
 	inputShape := input.Size()
 	batch, seq := inputShape[0], inputShape[1]
-	output := l.to.Zeros([]int{batch, seq, l.EmbeddingDim})
+	output := l.to.Create([]int{batch, seq, l.EmbeddingDim})
 
 	inputVec := input.Vector()
 	weightVec := l.weights.Vector()
@@ -164,7 +166,6 @@ func (l *EmbeddingLayer) Forward(input tensor.Tensor) tensor.Tensor {
 		}
 	}
 
-	l.to.Free(input)
 	return output
 }
 
@@ -172,6 +173,8 @@ func (l *EmbeddingLayer) Forward(input tensor.Tensor) tensor.Tensor {
 // Input: gradient of output [B, T, C]
 // Output: zero tensor [B, T] (no input gradients needed)
 func (l *EmbeddingLayer) Backward(input tensor.Tensor) tensor.Tensor {
+	defer l.cleanupForwardCache() // 确保缓存被清理
+
 	fmt.Printf("[EmbeddingLayer Backward] VocabSize=%d, EmbeddingDim=%d, weightGradients len=%d\n",
 		l.VocabSize, l.EmbeddingDim, len(l.weightGradients.Vector()))
 
@@ -199,66 +202,152 @@ func (l *EmbeddingLayer) Backward(input tensor.Tensor) tensor.Tensor {
 	}
 
 	outGrad := l.to.Zeros([]int{batch, seq})
-	l.to.Free(l.forwardInput)
-	l.to.Free(input)
 	return outGrad
 }
 
 // SaveForward performs a memory-optimized forward pass.
 // It uses lazy tensor allocation and minimal temporary storage.
 func (l *EmbeddingLayer) SaveForward(input tensor.Tensor) tensor.Tensor {
-	l.forwardInput = l.to.LazyClone(input)
-	inputShape := input.Size()
-	batch, seq := inputShape[0], inputShape[1]
-	output := l.to.LazyZeros([]int{batch, seq, l.EmbeddingDim})
+	shape := input.Size()
+	if len(shape) == 2 {
+		// Original token-id lookup behavior
+		batch, seq := shape[0], shape[1]
+		fmt.Printf("EmbeddingLayer.SaveForward: input shape: %v, batch=%d, seq=%d (ids)\n", shape, batch, seq)
 
-	inputVec := input.Vector()
-	weightVec := l.weights.Vector()
-	outputVec := output.Vector()
+		// save ids for backward use
+		l.forwardInput = l.to.LazyClone(input)
 
-	for b := 0; b < batch; b++ {
-		for t := 0; t < seq; t++ {
-			idx := int(inputVec[b*seq+t])
-			if idx < 0 || idx >= l.VocabSize {
-				continue
-			}
-			for d := 0; d < l.EmbeddingDim; d++ {
-				outputVec[(b*seq+t)*l.EmbeddingDim+d] = weightVec[idx*l.EmbeddingDim+d]
+		output := l.to.LazyZeros([]int{batch, seq, l.EmbeddingDim})
+
+		inputVec := input.Vector()
+		weightVec := l.weights.Vector()
+		outVec := output.Vector()
+
+		for b := 0; b < batch; b++ {
+			for t := 0; t < seq; t++ {
+				idx := int(inputVec[b*seq+t])
+				if idx < 0 || idx >= l.VocabSize {
+					continue
+				}
+				baseOut := (b*seq + t) * l.EmbeddingDim
+				baseW := idx * l.EmbeddingDim
+				for d := 0; d < l.EmbeddingDim; d++ {
+					outVec[baseOut+d] = weightVec[baseW+d]
+				}
 			}
 		}
-	}
 
-	l.to.Free(input)
-	return output
+		// l.to.Free(input)
+
+		fmt.Printf("EmbeddingLayer.SaveForward: output shape: %v\n", output.Size())
+		return output
+
+	} else if len(shape) == 3 {
+		// Input is already embedding vectors, add positional embeddings for each time step
+		batch, seq, emb := shape[0], shape[1], shape[2]
+		if emb != l.EmbeddingDim {
+			panic(fmt.Sprintf("EmbeddingLayer.SaveForward: 3D input last dim (%d) != EmbeddingDim (%d)", emb, l.EmbeddingDim))
+		}
+		fmt.Printf("EmbeddingLayer.SaveForward: input shape: %v, treating as pre-embedded -> add positional embeddings\n", shape)
+
+		// Use nil to indicate positional add forward
+		l.forwardInput = nil
+
+		// Clone input to avoid modifying original
+		output := l.to.LazyClone(input)
+		outVec := output.Vector()
+		weightVec := l.weights.Vector()
+
+		// Add positional embeddings
+		for b := 0; b < batch; b++ {
+			for t := 0; t < seq; t++ {
+				baseOut := (b*seq + t) * l.EmbeddingDim
+				baseW := t * l.EmbeddingDim
+				for d := 0; d < l.EmbeddingDim; d++ {
+					outVec[baseOut+d] += weightVec[baseW+d]
+				}
+			}
+		}
+		return output
+	} else {
+		panic(fmt.Sprintf("EmbeddingLayer.SaveForward: unsupported input shape: %v", shape))
+	}
 }
 
-// SaveBackward performs a memory-optimized backward pass.
-// It avoids full activation reconstruction and directly computes weight gradients.
+// SaveBackward corresponds to two forward cases
 func (l *EmbeddingLayer) SaveBackward(input tensor.Tensor) tensor.Tensor {
-	l.to.Clear(l.gradients)
-	gradVec := input.Vector()
+	defer l.cleanupForwardCache()
 
-	inputShape := l.forwardInput.Size()
-	batch, seq := inputShape[0], inputShape[1]
-	inputIdxVec := l.forwardInput.Vector()
+	gradShape := input.Size()
+	if len(gradShape) != 3 {
+		panic(fmt.Sprintf("EmbeddingLayer.SaveBackward: expected grad 3D [B,T,C], got %v", gradShape))
+	}
+	batch, seq, emb := gradShape[0], gradShape[1], gradShape[2]
+	if emb != l.EmbeddingDim {
+		panic("EmbeddingLayer.SaveBackward: grad last dim != EmbeddingDim")
+	}
+
+	gradVec := input.Vector()
 	gradWeightVec := l.weightGradients.Vector()
 
-	for b := 0; b < batch; b++ {
-		for t := 0; t < seq; t++ {
-			idx := int(inputIdxVec[b*seq+t])
-			if idx < 0 || idx >= l.VocabSize {
-				continue
+	if l.forwardInput == nil {
+		// Positional add branch: accumulate gradients by time step
+		for b := 0; b < batch; b++ {
+			for t := 0; t < seq; t++ {
+				baseGrad := (b*seq + t) * l.EmbeddingDim
+				baseW := t * l.EmbeddingDim
+				for d := 0; d < l.EmbeddingDim; d++ {
+					gradWeightVec[baseW+d] += gradVec[baseGrad+d]
+				}
 			}
-			for d := 0; d < l.EmbeddingDim; d++ {
-				gradWeightVec[idx*l.EmbeddingDim+d] += gradVec[(b*seq+t)*l.EmbeddingDim+d]
+		}
+	} else {
+		// IDs lookup branch: accumulate gradients by token index
+		idShape := l.forwardInput.Size()
+		if len(idShape) != 2 {
+			panic(fmt.Sprintf("EmbeddingLayer.SaveBackward: stored forwardInput shape invalid: %v", idShape))
+		}
+		idVec := l.forwardInput.Vector()
+
+		for b := 0; b < batch; b++ {
+			for t := 0; t < seq; t++ {
+				idx := int(idVec[b*seq+t])
+				if idx < 0 || idx >= l.VocabSize {
+					continue
+				}
+				baseGrad := (b*seq + t) * l.EmbeddingDim
+				baseW := idx * l.EmbeddingDim
+				for d := 0; d < l.EmbeddingDim; d++ {
+					gradWeightVec[baseW+d] += gradVec[baseGrad+d]
+				}
 			}
 		}
 	}
 
-	outGrad := l.to.LazyZeros([]int{batch, seq})
-	l.to.Free(l.forwardInput)
-	l.to.Free(input)
-	return outGrad
+	// Return placeholder grad with same shape as forward
+	out := l.to.LazyZeros([]int{batch, seq})
+
+	// l.to.Free(input)
+
+	return out
+}
+
+func (l *EmbeddingLayer) cleanupForwardCache() {
+	if l.forwardInput != nil {
+		l.to.Free(l.forwardInput)
+		l.forwardInput = nil
+	}
+}
+
+func (l *EmbeddingLayer) Close() {
+	l.cleanupForwardCache()
+
+	if l.parameters != nil {
+		l.to.Free(l.parameters)
+	}
+	if l.gradients != nil {
+		l.to.Free(l.gradients)
+	}
 }
 
 // Parameters returns the embedding weight tensor.
